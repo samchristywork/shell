@@ -1,5 +1,5 @@
 use std::env;
-use std::io::{self, Write};
+use std::io::{self, Write, BufRead};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -9,33 +9,45 @@ fn main() {
         io::stdout().flush().unwrap();
 
         let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
+        let stdin = io::stdin();
+        let mut reader = stdin.lock();
 
-        let input = input.trim();
+        match reader.read_line(&mut input) {
+            Ok(0) => {
+                break;
+            }
+            Ok(_) => {
+                let input = input.trim();
 
-        if input.is_empty() {
-            continue;
-        }
+                if input.is_empty() {
+                    continue;
+                }
 
-        let parts: Vec<&str> = input.split_whitespace().collect();
-        let command = parts[0];
-        let args = &parts[1..];
+                let parts: Vec<&str> = input.split_whitespace().collect();
+                let command = parts[0];
+                let args = &parts[1..];
 
-        match command {
-            "exit" => break,
-            "cd" => {
-                let target_dir = if args.is_empty() {
-                    env::home_dir().unwrap()
-                } else {
-                    Path::new(args[0]).to_path_buf()
-                };
+                match command {
+                    "exit" => break,
+                    "cd" => {
+                        let target_dir = if args.is_empty() {
+                            env::home_dir().unwrap()
+                        } else {
+                            Path::new(args[0]).to_path_buf()
+                        };
 
-                if let Err(e) = env::set_current_dir(&target_dir) {
-                    eprintln!("cd: {}: {}", target_dir.display(), e);
+                        if let Err(e) = env::set_current_dir(&target_dir) {
+                            eprintln!("cd: {}: {}", target_dir.display(), e);
+                        }
+                    }
+                    _ => {
+                        execute_command(command, args);
+                    }
                 }
             }
-            _ => {
-                execute_command(command, args);
+            Err(e) => {
+                eprintln!("Error reading input: {}", e);
+                break;
             }
         }
     }

@@ -22,6 +22,18 @@ fn main() {
         let args = &parts[1..];
 
         match command {
+            "exit" => break,
+            "cd" => {
+                let target_dir = if args.is_empty() {
+                    env::home_dir().unwrap()
+                } else {
+                    Path::new(args[0]).to_path_buf()
+                };
+
+                if let Err(e) = env::set_current_dir(&target_dir) {
+                    eprintln!("cd: {}: {}", target_dir.display(), e);
+                }
+            }
             _ => {
                 execute_command(command, args);
             }

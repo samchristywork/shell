@@ -1,18 +1,15 @@
+use rustyline::DefaultEditor;
+use rustyline::error::ReadlineError;
+use signal_hook::{consts::SIGINT, iterator::Signals};
 use std::env;
 use std::io::{self, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use signal_hook::{consts::SIGINT, iterator::Signals};
 use std::thread;
-use rustyline::DefaultEditor;
-use rustyline::error::ReadlineError;
 
 fn main() {
     let mut signals = Signals::new(&[SIGINT]).unwrap();
-    thread::spawn(move || {
-        for _sig in signals.forever() {
-        }
-    });
+    thread::spawn(move || for _sig in signals.forever() {});
 
     let mut rl = DefaultEditor::new().unwrap();
     if rl.load_history("history.txt").is_err() {

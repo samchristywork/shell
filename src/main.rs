@@ -1,9 +1,11 @@
 use std::env;
-use std::io::{self, Write, BufRead};
+use std::io::{self, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use signal_hook::{consts::SIGINT, iterator::Signals};
 use std::thread;
+use rustyline::DefaultEditor;
+use rustyline::error::ReadlineError;
 
 fn main() {
     let mut signals = Signals::new(&[SIGINT]).unwrap();
@@ -12,20 +14,18 @@ fn main() {
         }
     });
 
+    let mut rl = DefaultEditor::new().unwrap();
+    if rl.load_history("history.txt").is_err() {
+        println!("No previous history.");
+    }
+
     loop {
-        print!("> ");
-        io::stdout().flush().unwrap();
+        let readline = rl.readline("> ");
+        match readline {
+            Ok(line) => {
+                rl.add_history_entry(line.as_str());
 
-        let mut input = String::new();
-        let stdin = io::stdin();
-        let mut reader = stdin.lock();
-
-        match reader.read_line(&mut input) {
-            Ok(0) => {
-                break;
-            }
-            Ok(_) => {
-                let input = input.trim();
+                let input = line.trim();
 
                 if input.is_empty() {
                     continue;
@@ -53,12 +53,20 @@ fn main() {
                     }
                 }
             }
-            Err(e) => {
-                eprintln!("Error reading input: {}", e);
+            Err(ReadlineError::Interrupted) => {
+                println!("^C");
+                continue;
+            }
+            Err(ReadlineError::Eof) => {
+                break;
+            }
+            Err(err) => {
+                eprintln!("Error reading input: {:?}", err);
                 break;
             }
         }
     }
+    rl.save_history("history.txt").unwrap();
 }
 
 fn execute_command(command: &str, args: &[&str]) {

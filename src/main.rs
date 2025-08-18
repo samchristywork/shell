@@ -2,8 +2,16 @@ use std::env;
 use std::io::{self, Write, BufRead};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use signal_hook::{consts::SIGINT, iterator::Signals};
+use std::thread;
 
 fn main() {
+    let mut signals = Signals::new(&[SIGINT]).unwrap();
+    thread::spawn(move || {
+        for _sig in signals.forever() {
+        }
+    });
+
     loop {
         print!("> ");
         io::stdout().flush().unwrap();

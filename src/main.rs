@@ -6,11 +6,11 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
 
-fn main() {
-    let mut signals = Signals::new([SIGINT]).unwrap();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut signals = Signals::new([SIGINT])?;
     thread::spawn(move || for _sig in signals.forever() {});
 
-    let mut rl = DefaultEditor::new().unwrap();
+    let mut rl = DefaultEditor::new()?;
     if rl.load_history("history.txt").is_err() {
         println!("No previous history.");
     }
@@ -19,7 +19,7 @@ fn main() {
         let readline = rl.readline("> ");
         match readline {
             Ok(line) => {
-                rl.add_history_entry(line.as_str()).unwrap();
+                rl.add_history_entry(line.as_str())?;
 
                 let input = line.trim();
 
@@ -35,7 +35,7 @@ fn main() {
                     "exit" => break,
                     "cd" => {
                         let target_dir = if args.is_empty() {
-                            env::home_dir().unwrap()
+                            env::home_dir().unwrap_or_else(|| Path::new("/").to_path_buf())
                         } else {
                             Path::new(args[0]).to_path_buf()
                         };
@@ -62,7 +62,9 @@ fn main() {
             }
         }
     }
-    rl.save_history("history.txt").unwrap();
+    rl.save_history("history.txt")?;
+
+    Ok(())
 }
 
 fn execute_command(command: &str, args: &[&str]) {

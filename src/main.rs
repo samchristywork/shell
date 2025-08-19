@@ -55,6 +55,35 @@ fn handle_line(
 
             match command {
                 "exit" => return Ok(false),
+                "edit" => {
+                    let editor = env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+                    let last_command = if args.is_empty() {
+                        rl.history().into_iter().rev().nth(1).map(|entry| entry.to_string())
+                    } else {
+                        Some(args.join(" "))
+                    };
+
+                    if let Some(cmd) = last_command {
+                        let temp_file_path = Path::new("/tmp/last_command");
+                        std::fs::write(temp_file_path, cmd)?;
+                        let status = Command::new(editor)
+                            .arg(temp_file_path)
+                            .status()?;
+                        if status.success() {
+                            let edited_command = std::fs::read_to_string(temp_file_path)?;
+                            let edited_parts: Vec<&str> = edited_command.trim().split_whitespace().collect();
+                            if !edited_parts.is_empty() {
+                                let edited_cmd = edited_parts[0];
+                                let edited_args = &edited_parts[1..];
+                                execute_command(edited_cmd, edited_args);
+                            }
+                        } else {
+                            eprintln!("Editor exited with status: {}", status);
+                        }
+                    } else {
+                        eprintln!("No previous command to edit.");
+                    }
+                }
                 "cd" => {
                     let target_dir = if args.is_empty() {
                         env::home_dir().unwrap_or_else(|| PathBuf::from("/"))

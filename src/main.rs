@@ -107,13 +107,27 @@ fn read_and_execute(
     handle_line(rl, readline, history_file)
 }
 
-fn run_shell(history_file: PathBuf, prompt_cmd: Option<String>, prompt: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+fn run_shell(history_file: PathBuf, prompt_cmd: Option<String>, prompt: Option<String>, file: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let mut signals = Signals::new([SIGINT])?;
     thread::spawn(move || for _sig in signals.forever() {});
 
     let mut rl = DefaultEditor::new()?;
     if rl.load_history(&history_file).is_err() {
         println!("No previous history.");
+    }
+
+    if let Some(file_path) = file {
+        if file_path.exists() {
+            let content = std::fs::read_to_string(file_path)?;
+            for line in content.lines() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                let command = parts[0];
+                let args = &parts[1..];
+                execute_command(command, args);
+            }
+        } else {
+            eprintln!("File not found: {}", file_path.display());
+        }
     }
 
     while read_and_execute(&mut rl, &history_file, &prompt_cmd, &prompt)? {}
@@ -146,6 +160,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .required(false)
             .value_parser(value_parser!(String)),
         )
+        .arg(
+            arg!(
+                -f --file <FILE> "File to read commands from"
+            )
+            .required(false)
+            .value_parser(value_parser!(PathBuf)),
+        )
         .get_matches();
 
     let history_file = matches
@@ -158,6 +179,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let prompt_cmd = matches.get_one::<String>("promptcmd").cloned();
     let prompt = matches.get_one::<String>("prompt").cloned();
+    let file = matches.get_one::<PathBuf>("file").cloned();
 
-    run_shell(history_file, prompt_cmd, prompt)
+    run_shell(history_file, prompt_cmd, prompt, file)
 }

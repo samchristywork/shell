@@ -12,6 +12,7 @@ use std::thread;
 struct Config {
     history_file: Option<String>,
     prompt: Option<String>,
+    prompt_cmd: Option<String>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -28,7 +29,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .history_file
         .clone()
         .unwrap_or_else(|| "history.txt".to_string());
-    let prompt = config.prompt.clone().unwrap_or_else(|| "> ".to_string());
+    let prompt = config.prompt.clone();
+    let prompt_cmd = config.prompt_cmd.clone();
 
     let mut signals = Signals::new([SIGINT])?;
     thread::spawn(move || for _sig in signals.forever() {});
@@ -39,7 +41,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     loop {
-        let readline = rl.readline(&prompt);
+        let the_prompt = match &prompt_cmd {
+            Some(cmd) => {
+                let output = Command::new("sh")
+                    .arg("-c")
+                    .arg(cmd)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::inherit())
+                    .output()?;
+
+                String::from_utf8(output.stdout).unwrap_or_else(|_| "> ".to_string())
+            }
+            None => prompt.clone().unwrap_or_else(|| "> ".to_string()),
+        };
+
+        let readline = rl.readline(&the_prompt);
         match readline {
             Ok(line) => {
                 rl.add_history_entry(line.as_str())?;

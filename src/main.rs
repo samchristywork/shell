@@ -2,13 +2,12 @@ use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 use signal_hook::{consts::SIGINT, iterator::Signals};
 use std::env;
-use std::io::{self, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
 
 fn main() {
-    let mut signals = Signals::new(&[SIGINT]).unwrap();
+    let mut signals = Signals::new([SIGINT]).unwrap();
     thread::spawn(move || for _sig in signals.forever() {});
 
     let mut rl = DefaultEditor::new().unwrap();
@@ -20,7 +19,7 @@ fn main() {
         let readline = rl.readline("> ");
         match readline {
             Ok(line) => {
-                rl.add_history_entry(line.as_str());
+                rl.add_history_entry(line.as_str()).unwrap();
 
                 let input = line.trim();
 
@@ -58,7 +57,7 @@ fn main() {
                 break;
             }
             Err(err) => {
-                eprintln!("Error reading input: {:?}", err);
+                eprintln!("Error reading input: {err:?}");
                 break;
             }
         }
@@ -75,7 +74,7 @@ fn execute_command(command: &str, args: &[&str]) {
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(e) => {
-            eprintln!("Failed to execute {}: {}", command, e);
+            eprintln!("Failed to execute {command}: {e}");
             return;
         }
     };
@@ -85,11 +84,11 @@ fn execute_command(command: &str, args: &[&str]) {
     match status {
         Ok(status) => {
             if !status.success() {
-                eprintln!("Command exited with status: {}", status);
+                eprintln!("Command exited with status: {status}");
             }
         }
         Err(e) => {
-            eprintln!("Failed to wait for command: {}", e);
+            eprintln!("Failed to wait for command: {e}");
         }
     }
 }

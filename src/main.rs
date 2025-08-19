@@ -1,22 +1,45 @@
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
+use serde::Deserialize;
 use signal_hook::{consts::SIGINT, iterator::Signals};
 use std::env;
+use std::fs;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
 
+#[derive(Deserialize, Default)]
+struct Config {
+    history_file: Option<String>,
+    prompt: Option<String>,
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config_content = match fs::read_to_string("config.toml") {
+        Ok(content) => content,
+        Err(_e) => {
+            println!("Using default configuration.");
+            "".to_string()
+        }
+    };
+    let config: Config = toml::from_str(&config_content).unwrap_or_default();
+
+    let history_file = config
+        .history_file
+        .clone()
+        .unwrap_or_else(|| "history.txt".to_string());
+    let prompt = config.prompt.clone().unwrap_or_else(|| "> ".to_string());
+
     let mut signals = Signals::new([SIGINT])?;
     thread::spawn(move || for _sig in signals.forever() {});
 
     let mut rl = DefaultEditor::new()?;
-    if rl.load_history("history.txt").is_err() {
+    if rl.load_history(&history_file).is_err() {
         println!("No previous history.");
     }
 
     loop {
-        let readline = rl.readline("> ");
+        let readline = rl.readline(&prompt);
         match readline {
             Ok(line) => {
                 rl.add_history_entry(line.as_str())?;
@@ -62,7 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    rl.save_history("history.txt")?;
+    rl.save_history(&history_file)?;
 
     Ok(())
 }

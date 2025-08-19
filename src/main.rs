@@ -1,36 +1,47 @@
+use clap::{arg, command, value_parser};
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
-use serde::Deserialize;
 use signal_hook::{consts::SIGINT, iterator::Signals};
 use std::env;
-use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 
-#[derive(Deserialize, Default)]
-struct Config {
-    history_file: Option<String>,
-    prompt: Option<String>,
-    prompt_cmd: Option<String>,
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config_content = match fs::read_to_string("config.toml") {
-        Ok(content) => content,
-        Err(_e) => {
-            println!("Using default configuration.");
-            "".to_string()
-        }
-    };
-    let config: Config = toml::from_str(&config_content).unwrap_or_default();
+    let matches = command!()
+        .arg(
+            arg!(
+                -H --history <FILE> "File to store command history"
+            )
+            .required(false)
+            .value_parser(value_parser!(PathBuf)),
+        )
+        .arg(
+            arg!(
+                -p --promptcmd <CMD> "Command to execute for prompt"
+            )
+            .required(false)
+            .value_parser(value_parser!(String)),
+        )
+        .arg(
+            arg!(
+                -P --prompt <PROMPT> "Custom prompt string"
+            )
+            .required(false)
+            .value_parser(value_parser!(String)),
+        )
+        .get_matches();
 
-    let history_file = config
-        .history_file
-        .clone()
-        .unwrap_or_else(|| "history.txt".to_string());
-    let prompt = config.prompt.clone();
-    let prompt_cmd = config.prompt_cmd.clone();
+    let history_file = matches
+        .get_one::<PathBuf>("history")
+        .cloned()
+        .unwrap_or_else(|| {
+            let home_dir = env::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+            home_dir.join("history.txt")
+        });
+
+    let prompt_cmd = matches.get_one::<String>("promptcmd").cloned();
+    let prompt = matches.get_one::<String>("prompt").cloned();
 
     let mut signals = Signals::new([SIGINT])?;
     thread::spawn(move || for _sig in signals.forever() {});
@@ -90,7 +101,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Err(ReadlineError::Interrupted) => {
                 println!("^C");
-                continue;
             }
             Err(ReadlineError::Eof) => {
                 break;

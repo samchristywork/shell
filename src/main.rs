@@ -107,15 +107,7 @@ fn read_and_execute(
     handle_line(rl, readline, history_file)
 }
 
-fn run_shell(history_file: PathBuf, prompt_cmd: Option<String>, prompt: Option<String>, file: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
-    let mut signals = Signals::new([SIGINT])?;
-    thread::spawn(move || for _sig in signals.forever() {});
-
-    let mut rl = DefaultEditor::new()?;
-    if rl.load_history(&history_file).is_err() {
-        println!("No previous history.");
-    }
-
+fn execute_file_commands(file: &Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(file_path) = file {
         if file_path.exists() {
             let content = std::fs::read_to_string(file_path)?;
@@ -129,6 +121,19 @@ fn run_shell(history_file: PathBuf, prompt_cmd: Option<String>, prompt: Option<S
             eprintln!("File not found: {}", file_path.display());
         }
     }
+    Ok(())
+}
+
+fn run_shell(history_file: PathBuf, prompt_cmd: Option<String>, prompt: Option<String>, file: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
+    let mut signals = Signals::new([SIGINT])?;
+    thread::spawn(move || for _sig in signals.forever() {});
+
+    let mut rl = DefaultEditor::new()?;
+    if rl.load_history(&history_file).is_err() {
+        println!("No previous history.");
+    }
+
+    execute_file_commands(&file)?;
 
     while read_and_execute(&mut rl, &history_file, &prompt_cmd, &prompt)? {}
 

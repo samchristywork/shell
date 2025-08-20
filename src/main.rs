@@ -171,7 +171,7 @@ impl ShellCompleter {
                             name.to_string()
                         };
 
-                        let replacement = if partial_path.starts_with("~/") {
+                        let base_replacement = if partial_path.starts_with("~/") {
                             if dir_path == dirs::home_dir().unwrap_or_default() {
                                 format!("~/{}", name)
                             } else {
@@ -190,6 +190,12 @@ impl ShellCompleter {
                             format!("{}/{}", dir_path.display(), name)
                         } else {
                             name.to_string()
+                        };
+
+                        let replacement = if is_dir {
+                            format!("{}/", base_replacement)
+                        } else {
+                            base_replacement
                         };
 
                         candidates.push(Pair {

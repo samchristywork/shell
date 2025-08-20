@@ -58,7 +58,11 @@ fn handle_line(
                 "edit" => {
                     let editor = env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
                     let last_command = if args.is_empty() {
-                        rl.history().into_iter().rev().nth(1).map(|entry| entry.to_string())
+                        rl.history()
+                            .into_iter()
+                            .rev()
+                            .nth(1)
+                            .map(|entry| entry.to_string())
                     } else {
                         Some(args.join(" "))
                     };
@@ -66,12 +70,11 @@ fn handle_line(
                     if let Some(cmd) = last_command {
                         let temp_file_path = Path::new("/tmp/last_command");
                         std::fs::write(temp_file_path, cmd)?;
-                        let status = Command::new(editor)
-                            .arg(temp_file_path)
-                            .status()?;
+                        let status = Command::new(editor).arg(temp_file_path).status()?;
                         if status.success() {
                             let edited_command = std::fs::read_to_string(temp_file_path)?;
-                            let edited_parts: Vec<&str> = edited_command.trim().split_whitespace().collect();
+                            let edited_parts: Vec<&str> =
+                                edited_command.trim().split_whitespace().collect();
                             if !edited_parts.is_empty() {
                                 let edited_cmd = edited_parts[0];
                                 let edited_args = &edited_parts[1..];
@@ -101,9 +104,7 @@ fn handle_line(
             }
             Ok(true)
         }
-        Err(ReadlineError::Interrupted) => {
-            Ok(true)
-        }
+        Err(ReadlineError::Interrupted) => Ok(true),
         Err(ReadlineError::Eof) => Ok(false),
         Err(err) => {
             eprintln!("Error reading input: {err:?}");
@@ -115,10 +116,9 @@ fn handle_line(
 fn read_and_execute(
     rl: &mut DefaultEditor,
     history_file: &PathBuf,
-    prompt_cmd: &Option<String>,
     prompt: &Option<String>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    let the_prompt = match &prompt_cmd {
+    let the_prompt = match &prompt {
         Some(cmd) => {
             let output = Command::new("sh")
                 .arg("-c")
@@ -129,7 +129,7 @@ fn read_and_execute(
 
             String::from_utf8(output.stdout).unwrap_or_else(|_| "> ".to_string())
         }
-        None => prompt.clone().unwrap_or_else(|| "> ".to_string()),
+        None => "> ".to_string(),
     };
 
     let readline = rl.readline(&the_prompt);
@@ -153,7 +153,11 @@ fn execute_file_commands(file: &Option<PathBuf>) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
-fn run_shell(history_file: PathBuf, prompt_cmd: Option<String>, prompt: Option<String>, file: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
+fn run_shell(
+    history_file: PathBuf,
+    prompt: Option<String>,
+    file: Option<PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut signals = Signals::new([SIGINT])?;
     thread::spawn(move || for _sig in signals.forever() {});
 
@@ -164,7 +168,7 @@ fn run_shell(history_file: PathBuf, prompt_cmd: Option<String>, prompt: Option<S
 
     execute_file_commands(&file)?;
 
-    while read_and_execute(&mut rl, &history_file, &prompt_cmd, &prompt)? {}
+    while read_and_execute(&mut rl, &history_file, &prompt)? {}
 
     rl.save_history(&history_file)?;
 
@@ -182,14 +186,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .arg(
             arg!(
-                -p --promptcmd <CMD> "Command to execute for prompt"
-            )
-            .required(false)
-            .value_parser(value_parser!(String)),
-        )
-        .arg(
-            arg!(
-                -P --prompt <PROMPT> "Custom prompt string"
+                -p --prompt <CMD> "Command to execute for prompt"
             )
             .required(false)
             .value_parser(value_parser!(String)),
@@ -211,9 +208,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             home_dir.join("history.txt")
         });
 
-    let prompt_cmd = matches.get_one::<String>("promptcmd").cloned();
     let prompt = matches.get_one::<String>("prompt").cloned();
     let file = matches.get_one::<PathBuf>("file").cloned();
 
-    run_shell(history_file, prompt_cmd, prompt, file)
+    run_shell(history_file, prompt, file)
 }

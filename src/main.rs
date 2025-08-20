@@ -1,4 +1,5 @@
 use clap::{arg, command, value_parser};
+use dirs;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 use signal_hook::{consts::SIGINT, iterator::Signals};
@@ -89,7 +90,7 @@ fn handle_line(
                 }
                 "cd" => {
                     let target_dir = if args.is_empty() {
-                        env::home_dir().unwrap_or_else(|| PathBuf::from("/"))
+                        dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
                     } else {
                         PathBuf::from(args[0])
                     };
@@ -204,7 +205,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .get_one::<PathBuf>("history")
         .cloned()
         .unwrap_or_else(|| {
-            let home_dir = env::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+            let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
             home_dir.join("history.txt")
         });
 

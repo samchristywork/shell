@@ -125,6 +125,85 @@ impl ShellCompleter {
         commands.dedup();
         commands
     }
+
+    fn get_filename_completions(partial_path: &str) -> Vec<Pair> {
+        let mut candidates = Vec::new();
+
+        let expanded_path = if partial_path.starts_with("~/") {
+            if let Some(home) = dirs::home_dir() {
+                home.join(&partial_path[2..]).to_string_lossy().to_string()
+            } else {
+                partial_path.to_string()
+            }
+        } else if partial_path == "~" {
+            if let Some(home) = dirs::home_dir() {
+                home.to_string_lossy().to_string()
+            } else {
+                partial_path.to_string()
+            }
+        } else {
+            partial_path.to_string()
+        };
+
+        let path = Path::new(&expanded_path);
+        let (dir_path, filename_prefix) = if expanded_path.ends_with('/') {
+            (path, "")
+        } else if expanded_path.contains('/') {
+            match path.parent() {
+                Some(parent) => (
+                    parent,
+                    path.file_name().unwrap_or_default().to_str().unwrap_or(""),
+                ),
+                None => (Path::new("."), expanded_path.as_str()),
+            }
+        } else {
+            (Path::new("."), expanded_path.as_str())
+        };
+
+        if let Ok(entries) = std::fs::read_dir(dir_path) {
+            for entry in entries.flatten() {
+                if let Some(name) = entry.file_name().to_str() {
+                    if name.starts_with(filename_prefix) {
+                        let is_dir = entry.file_type().map_or(false, |ft| ft.is_dir());
+                        let display_name = if is_dir {
+                            format!("{}/", name)
+                        } else {
+                            name.to_string()
+                        };
+
+                        let replacement = if partial_path.starts_with("~/") {
+                            if dir_path == dirs::home_dir().unwrap_or_default() {
+                                format!("~/{}", name)
+                            } else {
+                                let relative_dir = dir_path
+                                    .strip_prefix(dirs::home_dir().unwrap_or_default())
+                                    .unwrap_or(dir_path);
+                                if relative_dir == Path::new("") {
+                                    format!("~/{}", name)
+                                } else {
+                                    format!("~/{}/{}", relative_dir.display(), name)
+                                }
+                            }
+                        } else if dir_path == Path::new(".") {
+                            name.to_string()
+                        } else if expanded_path.contains('/') {
+                            format!("{}/{}", dir_path.display(), name)
+                        } else {
+                            name.to_string()
+                        };
+
+                        candidates.push(Pair {
+                            display: display_name,
+                            replacement,
+                        });
+                    }
+                }
+            }
+        }
+
+        candidates.sort_by(|a, b| a.display.cmp(&b.display));
+        candidates
+    }
 }
 
 impl Completer for ShellCompleter {
@@ -164,7 +243,11 @@ impl Completer for ShellCompleter {
             let start = pos - word_to_complete.len();
             Ok((start, candidates))
         } else {
-            Ok((pos, vec![]))
+            let current_word_start = line[..pos].rfind(' ').map_or(0, |i| i + 1);
+            let word_to_complete = &line[current_word_start..pos];
+
+            let candidates = Self::get_filename_completions(word_to_complete);
+            Ok((current_word_start, candidates))
         }
     }
 }

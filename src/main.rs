@@ -1,12 +1,173 @@
 use clap::{arg, command, value_parser};
-use dirs;
-use rustyline::DefaultEditor;
+use rustyline::completion::{Completer, Pair};
+use rustyline::config::Config;
 use rustyline::error::ReadlineError;
+use rustyline::highlight::{CmdKind, Highlighter, MatchingBracketHighlighter};
+use rustyline::hint::{Hinter, HistoryHinter};
+use rustyline::validate::{MatchingBracketValidator, Validator};
+use rustyline::{CompletionType, Helper};
+use rustyline::{Context, Editor};
 use signal_hook::{consts::SIGINT, iterator::Signals};
+use std::borrow::Cow;
 use std::env;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
+
+struct ShellHelper {
+    completer: ShellCompleter,
+    hinter: HistoryHinter,
+    validator: MatchingBracketValidator,
+    highlighter: MatchingBracketHighlighter,
+}
+
+impl ShellHelper {
+    fn new() -> ShellHelper {
+        ShellHelper {
+            completer: ShellCompleter::new(),
+            hinter: HistoryHinter::new(),
+            validator: MatchingBracketValidator::new(),
+            highlighter: MatchingBracketHighlighter::new(),
+        }
+    }
+}
+
+impl Helper for ShellHelper {}
+
+impl Completer for ShellHelper {
+    type Candidate = Pair;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        ctx: &Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Pair>)> {
+        self.completer.complete(line, pos, ctx)
+    }
+}
+
+impl Hinter for ShellHelper {
+    type Hint = String;
+
+    fn hint(&self, line: &str, pos: usize, ctx: &Context<'_>) -> Option<String> {
+        self.hinter.hint(line, pos, ctx)
+    }
+}
+
+impl Validator for ShellHelper {
+    fn validate(
+        &self,
+        ctx: &mut rustyline::validate::ValidationContext,
+    ) -> rustyline::Result<rustyline::validate::ValidationResult> {
+        self.validator.validate(ctx)
+    }
+
+    fn validate_while_typing(&self) -> bool {
+        self.validator.validate_while_typing()
+    }
+}
+
+impl Highlighter for ShellHelper {
+    fn highlight_prompt<'b, 's: 'b, 'p: 'b>(
+        &'s self,
+        prompt: &'p str,
+        default: bool,
+    ) -> Cow<'b, str> {
+        self.highlighter.highlight_prompt(prompt, default)
+    }
+
+    fn highlight_hint<'h>(&self, hint: &'h str) -> Cow<'h, str> {
+        self.highlighter.highlight_hint(hint)
+    }
+
+    fn highlight<'l>(&self, line: &'l str, pos: usize) -> Cow<'l, str> {
+        self.highlighter.highlight(line, pos)
+    }
+
+    fn highlight_char(&self, line: &str, pos: usize, kind: CmdKind) -> bool {
+        self.highlighter.highlight_char(line, pos, kind)
+    }
+}
+
+struct ShellCompleter;
+
+impl ShellCompleter {
+    fn new() -> ShellCompleter {
+        ShellCompleter
+    }
+
+    fn get_builtin_commands() -> Vec<String> {
+        vec!["cd".to_string(), "edit".to_string(), "exit".to_string()]
+    }
+
+    fn get_path_commands() -> Vec<String> {
+        let mut commands = Vec::new();
+
+        if let Ok(path_var) = env::var("PATH") {
+            for path in path_var.split(':') {
+                if let Ok(entries) = std::fs::read_dir(path) {
+                    for entry in entries.flatten() {
+                        if let Ok(metadata) = entry.metadata() {
+                            if metadata.is_file() && metadata.permissions().mode() & 0o111 != 0 {
+                                if let Some(name) = entry.file_name().to_str() {
+                                    commands.push(name.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        commands.sort();
+        commands.dedup();
+        commands
+    }
+}
+
+impl Completer for ShellCompleter {
+    type Candidate = Pair;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Pair>)> {
+        let words: Vec<&str> = line[..pos].split_whitespace().collect();
+
+        if words.is_empty() || (words.len() == 1 && !line[..pos].ends_with(' ')) {
+            let word_to_complete = if words.is_empty() { "" } else { words[0] };
+
+            let mut candidates = Vec::new();
+
+            for cmd in Self::get_builtin_commands() {
+                if cmd.starts_with(word_to_complete) {
+                    candidates.push(Pair {
+                        display: cmd.clone(),
+                        replacement: cmd,
+                    });
+                }
+            }
+
+            for cmd in Self::get_path_commands() {
+                if cmd.starts_with(word_to_complete) {
+                    candidates.push(Pair {
+                        display: cmd.clone(),
+                        replacement: cmd,
+                    });
+                }
+            }
+
+            let start = pos - word_to_complete.len();
+            Ok((start, candidates))
+        } else {
+            Ok((pos, vec![]))
+        }
+    }
+}
 
 fn execute_command(command: &str, args: &[&str]) {
     let mut cmd = Command::new(command);
@@ -37,9 +198,9 @@ fn execute_command(command: &str, args: &[&str]) {
 }
 
 fn handle_line(
-    rl: &mut DefaultEditor,
+    rl: &mut Editor<ShellHelper, rustyline::history::FileHistory>,
     readline: Result<String, ReadlineError>,
-    history_file: &PathBuf,
+    _history_file: &Path,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     match readline {
         Ok(line) => {
@@ -75,7 +236,7 @@ fn handle_line(
                         if status.success() {
                             let edited_command = std::fs::read_to_string(temp_file_path)?;
                             let edited_parts: Vec<&str> =
-                                edited_command.trim().split_whitespace().collect();
+                                edited_command.split_whitespace().collect();
                             if !edited_parts.is_empty() {
                                 let edited_cmd = edited_parts[0];
                                 let edited_args = &edited_parts[1..];
@@ -115,8 +276,8 @@ fn handle_line(
 }
 
 fn read_and_execute(
-    rl: &mut DefaultEditor,
-    history_file: &PathBuf,
+    rl: &mut Editor<ShellHelper, rustyline::history::FileHistory>,
+    history_file: &Path,
     prompt: &Option<String>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let the_prompt = match &prompt {
@@ -162,7 +323,13 @@ fn run_shell(
     let mut signals = Signals::new([SIGINT])?;
     thread::spawn(move || for _sig in signals.forever() {});
 
-    let mut rl = DefaultEditor::new()?;
+    let config = Config::builder()
+        .completion_type(CompletionType::List)
+        .build();
+    let helper = ShellHelper::new();
+    let mut rl = Editor::with_config(config)?;
+    rl.set_helper(Some(helper));
+
     if rl.load_history(&history_file).is_err() {
         println!("No previous history.");
     }

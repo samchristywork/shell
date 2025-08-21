@@ -288,7 +288,48 @@ fn execute_command(command: &str, args: &[&str]) {
     }
 }
 
-fn execute_piped_commands(commands: Vec<Vec<&str>>) {
+fn parse_arguments(input: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current_arg = String::new();
+    let mut in_quotes = false;
+    let mut chars = input.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match c {
+            '"' if !in_quotes => {
+                in_quotes = true;
+            }
+            '"' if in_quotes => {
+                in_quotes = false;
+            }
+            ' ' | '\t' if !in_quotes => {
+                if !current_arg.is_empty() {
+                    args.push(current_arg.clone());
+                    current_arg.clear();
+                }
+                // Skip multiple spaces
+                while let Some(&next_char) = chars.peek() {
+                    if next_char == ' ' || next_char == '\t' {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            _ => {
+                current_arg.push(c);
+            }
+        }
+    }
+
+    if !current_arg.is_empty() {
+        args.push(current_arg);
+    }
+
+    args
+}
+
+fn execute_piped_commands(commands: Vec<Vec<String>>) {
     if commands.is_empty() {
         return;
     }
@@ -296,7 +337,8 @@ fn execute_piped_commands(commands: Vec<Vec<&str>>) {
     if commands.len() == 1 {
         let cmd = &commands[0];
         if !cmd.is_empty() {
-            execute_command(cmd[0], &cmd[1..]);
+            let cmd_args: Vec<&str> = cmd[1..].iter().map(|s| s.as_str()).collect();
+            execute_command(&cmd[0], &cmd_args);
         }
         return;
     }
@@ -309,8 +351,8 @@ fn execute_piped_commands(commands: Vec<Vec<&str>>) {
             continue;
         }
 
-        let command = cmd_parts[0];
-        let args = &cmd_parts[1..];
+        let command = &cmd_parts[0];
+        let args: Vec<&str> = cmd_parts[1..].iter().map(|s| s.as_str()).collect();
 
         let mut cmd = Command::new(command);
         cmd.args(args);
@@ -367,11 +409,11 @@ fn handle_line(
                 return Ok(true);
             }
 
-            let parts: Vec<&str> = input.split_whitespace().collect();
-            let command = parts[0];
-            let args = &parts[1..];
+            let parts = parse_arguments(input);
+            let command = &parts[0];
+            let args: Vec<&str> = parts[1..].iter().map(|s| s.as_str()).collect();
 
-            match command {
+            match command.as_str() {
                 "exit" => return Ok(false),
                 "edit" => {
                     let editor = env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
@@ -391,12 +433,12 @@ fn handle_line(
                         let status = Command::new(editor).arg(temp_file_path).status()?;
                         if status.success() {
                             let edited_command = std::fs::read_to_string(temp_file_path)?;
-                            let edited_parts: Vec<&str> =
-                                edited_command.split_whitespace().collect();
+                            let edited_parts = parse_arguments(edited_command.trim());
                             if !edited_parts.is_empty() {
-                                let edited_cmd = edited_parts[0];
-                                let edited_args = &edited_parts[1..];
-                                execute_command(edited_cmd, edited_args);
+                                let edited_cmd = &edited_parts[0];
+                                let edited_args: Vec<&str> =
+                                    edited_parts[1..].iter().map(|s| s.as_str()).collect();
+                                execute_command(edited_cmd, &edited_args);
                             }
                         } else {
                             eprintln!("Editor exited with status: {}", status);
@@ -419,13 +461,13 @@ fn handle_line(
                 _ => {
                     if input.contains('|') {
                         let pipe_parts: Vec<&str> = input.split('|').collect();
-                        let commands: Vec<Vec<&str>> = pipe_parts
+                        let commands: Vec<Vec<String>> = pipe_parts
                             .iter()
-                            .map(|part| part.trim().split_whitespace().collect())
+                            .map(|part| parse_arguments(part.trim()))
                             .collect();
                         execute_piped_commands(commands);
                     } else {
-                        execute_command(command, args);
+                        execute_command(command, &args);
                     }
                 }
             }
@@ -470,10 +512,12 @@ fn execute_file_commands(file: &Option<PathBuf>) -> Result<(), Box<dyn std::erro
         if file_path.exists() {
             let content = std::fs::read_to_string(file_path)?;
             for line in content.lines() {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                let command = parts[0];
-                let args = &parts[1..];
-                execute_command(command, args);
+                let parts = parse_arguments(line);
+                if !parts.is_empty() {
+                    let command = &parts[0];
+                    let args: Vec<&str> = parts[1..].iter().map(|s| s.as_str()).collect();
+                    execute_command(command, &args);
+                }
             }
         } else {
             eprintln!("File not found: {}", file_path.display());

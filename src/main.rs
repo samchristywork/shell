@@ -1,4 +1,5 @@
 use clap::{arg, command, value_parser};
+use colored::*;
 use rustyline::completion::{Completer, Pair};
 use rustyline::config::Config;
 use rustyline::error::ReadlineError;
@@ -233,7 +234,7 @@ impl Completer for ShellCompleter {
             for cmd in Self::get_builtin_commands() {
                 if cmd.starts_with(word_to_complete) {
                     candidates.push(Pair {
-                        display: cmd.clone(),
+                        display: format!("{} (builtin)", cmd.green().bold()),
                         replacement: cmd,
                     });
                 }
@@ -269,7 +270,7 @@ fn execute_command(command: &str, args: &[&str]) {
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(e) => {
-            eprintln!("Failed to execute {command}: {e}");
+            eprintln!("{}: {command}: {e}", "Error".red().bold());
             return;
         }
     };
@@ -279,11 +280,11 @@ fn execute_command(command: &str, args: &[&str]) {
     match status {
         Ok(status) => {
             if !status.success() {
-                eprintln!("Command exited with status: {status}");
+                eprintln!("{}: Command exited with status: {status}", "Warning".yellow().bold());
             }
         }
         Err(e) => {
-            eprintln!("Failed to wait for command: {e}");
+            eprintln!("{}: Failed to wait for command: {e}", "Error".red().bold());
         }
     }
 }
@@ -375,7 +376,7 @@ fn execute_piped_commands(commands: Vec<Vec<String>>) {
                 children.push(child);
             }
             Err(e) => {
-                eprintln!("Failed to execute {command}: {e}");
+                eprintln!("{}: {command}: {e}", "Error".red().bold());
                 return;
             }
         }
@@ -385,11 +386,11 @@ fn execute_piped_commands(commands: Vec<Vec<String>>) {
         match child.wait() {
             Ok(status) => {
                 if !status.success() {
-                    eprintln!("Command exited with status: {status}");
+                    eprintln!("{}: Command exited with status: {status}", "Warning".yellow().bold());
                 }
             }
             Err(e) => {
-                eprintln!("Failed to wait for command: {e}");
+                eprintln!("{}: Failed to wait for command: {e}", "Error".red().bold());
             }
         }
     }
@@ -441,10 +442,10 @@ fn handle_line(
                                 execute_command(edited_cmd, &edited_args);
                             }
                         } else {
-                            eprintln!("Editor exited with status: {}", status);
+                            eprintln!("{}: Editor exited with status: {}", "Warning".yellow().bold(), status);
                         }
                     } else {
-                        eprintln!("No previous command to edit.");
+                        eprintln!("{}: No previous command to edit.", "Info".blue().bold());
                     }
                 }
                 "cd" => {
@@ -455,7 +456,7 @@ fn handle_line(
                     };
 
                     if let Err(e) = env::set_current_dir(&target_dir) {
-                        eprintln!("cd: {}: {}", target_dir.display(), e);
+                        eprintln!("{}: {}: {}", "cd".red().bold(), target_dir.display(), e);
                     }
                 }
                 _ => {
@@ -476,7 +477,7 @@ fn handle_line(
         Err(ReadlineError::Interrupted) => Ok(true),
         Err(ReadlineError::Eof) => Ok(false),
         Err(err) => {
-            eprintln!("Error reading input: {err:?}");
+            eprintln!("{}: Error reading input: {err:?}", "Error".red().bold());
             Ok(false)
         }
     }
@@ -487,7 +488,7 @@ fn read_and_execute(
     history_file: &Path,
     prompt: &Option<String>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    let default_prompt = format!("{}> ", env::current_dir()?.display());
+    let default_prompt = format!("{}> ", env::current_dir()?.display().to_string().cyan().bold());
 
     let the_prompt = match &prompt {
         Some(cmd) => {
@@ -523,7 +524,7 @@ fn execute_file_commands(file: &Option<PathBuf>) -> Result<(), Box<dyn std::erro
                 }
             }
         } else {
-            eprintln!("File not found: {}", file_path.display());
+            eprintln!("{}: File not found: {}", "Error".red().bold(), file_path.display());
         }
     }
     Ok(())
@@ -545,7 +546,7 @@ fn run_shell(
     rl.set_helper(Some(helper));
 
     if rl.load_history(&history_file).is_err() {
-        println!("No previous history.");
+        println!("{}: No previous history.", "Info".blue().bold());
     }
 
     execute_file_commands(&file)?;

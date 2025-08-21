@@ -288,6 +288,71 @@ fn execute_command(command: &str, args: &[&str]) {
     }
 }
 
+fn execute_piped_commands(commands: Vec<Vec<&str>>) {
+    if commands.is_empty() {
+        return;
+    }
+
+    if commands.len() == 1 {
+        let cmd = &commands[0];
+        if !cmd.is_empty() {
+            execute_command(cmd[0], &cmd[1..]);
+        }
+        return;
+    }
+
+    let mut children = Vec::new();
+    let mut previous_stdout = None;
+
+    for (i, cmd_parts) in commands.iter().enumerate() {
+        if cmd_parts.is_empty() {
+            continue;
+        }
+
+        let command = cmd_parts[0];
+        let args = &cmd_parts[1..];
+
+        let mut cmd = Command::new(command);
+        cmd.args(args);
+
+        if let Some(stdout) = previous_stdout.take() {
+            cmd.stdin(stdout);
+        }
+
+        if i == commands.len() - 1 {
+            cmd.stdout(Stdio::inherit());
+        } else {
+            cmd.stdout(Stdio::piped());
+        }
+
+        cmd.stderr(Stdio::inherit());
+
+        match cmd.spawn() {
+            Ok(mut child) => {
+                previous_stdout = child.stdout.take();
+                children.push(child);
+            }
+            Err(e) => {
+                eprintln!("Failed to execute {command}: {e}");
+                return;
+            }
+        }
+    }
+
+    for mut child in children {
+        match child.wait() {
+            Ok(status) => {
+                if !status.success() {
+                    eprintln!("Command exited with status: {status}");
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to wait for command: {e}");
+            }
+        }
+    }
+}
+
 fn handle_line(
     rl: &mut Editor<ShellHelper, rustyline::history::FileHistory>,
     readline: Result<String, ReadlineError>,
@@ -352,7 +417,16 @@ fn handle_line(
                     }
                 }
                 _ => {
-                    execute_command(command, args);
+                    if input.contains('|') {
+                        let pipe_parts: Vec<&str> = input.split('|').collect();
+                        let commands: Vec<Vec<&str>> = pipe_parts
+                            .iter()
+                            .map(|part| part.trim().split_whitespace().collect())
+                            .collect();
+                        execute_piped_commands(commands);
+                    } else {
+                        execute_command(command, args);
+                    }
                 }
             }
             Ok(true)
@@ -382,7 +456,9 @@ fn read_and_execute(
 
             String::from_utf8(output.stdout).unwrap_or_else(|_| "> ".to_string())
         }
-        None => "> ".to_string(),
+        None => {
+            format!("{}> ", env::current_dir()?.display())
+        }
     };
 
     let readline = rl.readline(&the_prompt);

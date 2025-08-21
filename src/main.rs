@@ -292,6 +292,20 @@ fn execute_command(command: &str, args: &[&str]) {
     }
 }
 
+fn expand_tilde(path: &str) -> String {
+    if path == "~" {
+        dirs::home_dir()
+            .map(|home| home.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string())
+    } else if path.starts_with("~/") {
+        dirs::home_dir()
+            .map(|home| home.join(&path[2..]).to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string())
+    } else {
+        path.to_string()
+    }
+}
+
 fn parse_arguments(input: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut current_arg = String::new();
@@ -308,7 +322,7 @@ fn parse_arguments(input: &str) -> Vec<String> {
             }
             ' ' | '\t' if !in_quotes => {
                 if !current_arg.is_empty() {
-                    args.push(current_arg.clone());
+                    args.push(expand_tilde(&current_arg));
                     current_arg.clear();
                 }
                 // Skip multiple spaces
@@ -327,7 +341,7 @@ fn parse_arguments(input: &str) -> Vec<String> {
     }
 
     if !current_arg.is_empty() {
-        args.push(current_arg);
+        args.push(expand_tilde(&current_arg));
     }
 
     args
@@ -462,15 +476,7 @@ fn handle_line(
                     let target_dir = if args.is_empty() {
                         dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
                     } else {
-                        let path_str = args[0];
-                        if path_str == "~" {
-                            dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
-                        } else if path_str.starts_with("~/") {
-                            let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
-                            home_dir.join(&path_str[2..])
-                        } else {
-                            PathBuf::from(path_str)
-                        }
+                        PathBuf::from(args[0])
                     };
 
                     if let Err(e) = env::set_current_dir(&target_dir) {

@@ -10,6 +10,7 @@ use rustyline::{CompletionType, Helper};
 use rustyline::{Context, Editor};
 use signal_hook::{consts::SIGINT, iterator::Signals};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::env;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -100,7 +101,12 @@ impl ShellCompleter {
     }
 
     fn get_builtin_commands() -> Vec<String> {
-        vec!["cd".to_string(), "edit".to_string(), "exit".to_string()]
+        vec![
+            "cd".to_string(),
+            "edit".to_string(),
+            "exit".to_string(),
+            "alias".to_string(),
+        ]
     }
 
     fn get_path_commands() -> Vec<String> {
@@ -420,6 +426,7 @@ fn handle_line(
     rl: &mut Editor<ShellHelper, rustyline::history::FileHistory>,
     readline: Result<String, ReadlineError>,
     _history_file: &Path,
+    aliases: &mut HashMap<String, String>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     match readline {
         Ok(line) => {
@@ -436,6 +443,22 @@ fn handle_line(
 
             match command.as_str() {
                 "exit" => return Ok(false),
+                "alias" => {
+                    if args.is_empty() {
+                        for (name, value) in aliases.iter() {
+                            println!("alias {}=\"{}\"", name, value);
+                        }
+                    } else if args.len() == 1 && args[0].contains('=') {
+                        let alias_def = args[0];
+                        if let Some(eq_pos) = alias_def.find('=') {
+                            let name = alias_def[..eq_pos].to_string();
+                            let value = alias_def[eq_pos + 1..].trim_matches('"').to_string();
+                            aliases.insert(name, value);
+                        }
+                    } else {
+                        eprintln!("{}: Usage: alias [name=value]", "alias".red().bold());
+                    }
+                }
                 "edit" => {
                     let editor = env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
                     let last_command = if args.is_empty() {
@@ -484,15 +507,42 @@ fn handle_line(
                     }
                 }
                 _ => {
+                    let expanded_command = if let Some(alias_value) = aliases.get(command) {
+                        alias_value.clone()
+                    } else {
+                        command.clone()
+                    };
+
                     if input.contains('|') {
                         let pipe_parts: Vec<&str> = input.split('|').collect();
                         let commands: Vec<Vec<String>> = pipe_parts
                             .iter()
-                            .map(|part| parse_arguments(part.trim()))
+                            .map(|part| {
+                                let mut parsed = parse_arguments(part.trim());
+                                if !parsed.is_empty() {
+                                    if let Some(alias_value) = aliases.get(&parsed[0]) {
+                                        let alias_parts = parse_arguments(alias_value);
+                                        parsed.splice(0..1, alias_parts);
+                                    }
+                                }
+                                parsed
+                            })
                             .collect();
                         execute_piped_commands(commands);
                     } else {
-                        execute_command(command, &args);
+                        if expanded_command != *command {
+                            let expanded_parts = parse_arguments(&expanded_command);
+                            let mut final_args = expanded_parts.clone();
+                            final_args.extend_from_slice(
+                                &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                            );
+                            let final_command = &final_args[0];
+                            let final_arg_refs: Vec<&str> =
+                                final_args[1..].iter().map(|s| s.as_str()).collect();
+                            execute_command(final_command, &final_arg_refs);
+                        } else {
+                            execute_command(command, &args);
+                        }
                     }
                 }
             }
@@ -511,6 +561,7 @@ fn read_and_execute(
     rl: &mut Editor<ShellHelper, rustyline::history::FileHistory>,
     history_file: &Path,
     prompt: &Option<String>,
+    aliases: &mut HashMap<String, String>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let default_prompt = format!(
         "{}> ",
@@ -535,19 +586,80 @@ fn read_and_execute(
     };
 
     let readline = rl.readline(&the_prompt);
-    handle_line(rl, readline, history_file)
+    handle_line(rl, readline, history_file, aliases)
 }
 
-fn execute_file_commands(file: &Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
+fn execute_file_commands(
+    file: &Option<PathBuf>,
+    aliases: &mut HashMap<String, String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(file_path) = file {
         if file_path.exists() {
             let content = std::fs::read_to_string(file_path)?;
             for line in content.lines() {
-                let parts = parse_arguments(line);
-                if !parts.is_empty() {
-                    let command = &parts[0];
-                    let args: Vec<&str> = parts[1..].iter().map(|s| s.as_str()).collect();
-                    execute_command(command, &args);
+                let input = line.trim();
+                if input.is_empty() {
+                    continue;
+                }
+
+                let parts = parse_arguments(input);
+                if parts.is_empty() {
+                    continue;
+                }
+
+                let command = &parts[0];
+                let args: Vec<&str> = parts[1..].iter().map(|s| s.as_str()).collect();
+
+                match command.as_str() {
+                    "exit" => break,
+                    "alias" => {
+                        if args.is_empty() {
+                            for (name, value) in aliases.iter() {
+                                println!("alias {}=\"{}\"", name, value);
+                            }
+                        } else if args.len() == 1 && args[0].contains('=') {
+                            let alias_def = args[0];
+                            if let Some(eq_pos) = alias_def.find('=') {
+                                let name = alias_def[..eq_pos].to_string();
+                                let value = alias_def[eq_pos + 1..].trim_matches('"').to_string();
+                                aliases.insert(name, value);
+                            }
+                        } else {
+                            eprintln!("{}: Usage: alias [name=value]", "alias".red().bold());
+                        }
+                    }
+                    "cd" => {
+                        let target_dir = if args.is_empty() {
+                            dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
+                        } else {
+                            PathBuf::from(args[0])
+                        };
+
+                        if let Err(e) = env::set_current_dir(&target_dir) {
+                            eprintln!("{}: {}: {}", "cd".red().bold(), target_dir.display(), e);
+                        }
+                    }
+                    _ => {
+                        let expanded_command = if let Some(alias_value) = aliases.get(command) {
+                            alias_value.clone()
+                        } else {
+                            command.clone()
+                        };
+
+                        if expanded_command != *command {
+                            let expanded_parts = parse_arguments(&expanded_command);
+                            let mut final_args = expanded_parts.clone();
+                            final_args.extend_from_slice(
+                                &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                            );
+                            let final_command = &final_args[0];
+                            let final_arg_refs: Vec<&str> =
+                                final_args[1..].iter().map(|s| s.as_str()).collect();
+                            execute_command(final_command, &final_arg_refs);
+                        } else {
+                            execute_command(command, &args);
+                        }
+                    }
                 }
             }
         } else {
@@ -580,9 +692,9 @@ fn run_shell(
         println!("{}: No previous history.", "Info".blue().bold());
     }
 
-    execute_file_commands(&file)?;
-
-    while read_and_execute(&mut rl, &history_file, &prompt)? {}
+    let mut aliases = HashMap::new();
+    execute_file_commands(&file, &mut aliases)?;
+    while read_and_execute(&mut rl, &history_file, &prompt, &mut aliases)? {}
 
     rl.save_history(&history_file)?;
 

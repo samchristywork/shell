@@ -487,6 +487,8 @@ fn read_and_execute(
     history_file: &Path,
     prompt: &Option<String>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
+    let default_prompt = format!("{}> ", env::current_dir()?.display());
+
     let the_prompt = match &prompt {
         Some(cmd) => {
             let output = Command::new("sh")
@@ -496,11 +498,12 @@ fn read_and_execute(
                 .stderr(Stdio::inherit())
                 .output()?;
 
-            String::from_utf8(output.stdout).unwrap_or_else(|_| "> ".to_string())
+            match String::from_utf8(output.stdout) {
+                Ok(prompt_str) => prompt_str,
+                Err(_) => default_prompt,
+            }
         }
-        None => {
-            format!("{}> ", env::current_dir()?.display())
-        }
+        None => default_prompt,
     };
 
     let readline = rl.readline(&the_prompt);

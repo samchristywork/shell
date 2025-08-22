@@ -331,6 +331,7 @@ fn parse_arguments(input: &str) -> Vec<String> {
                     args.push(expand_tilde(&current_arg));
                     current_arg.clear();
                 }
+
                 // Skip multiple spaces
                 while let Some(&next_char) = chars.peek() {
                     if next_char == ' ' || next_char == '\t' {
@@ -437,115 +438,129 @@ fn handle_line(
                 return Ok(true);
             }
 
-            let parts = parse_arguments(input);
-            let command = &parts[0];
-            let args: Vec<&str> = parts[1..].iter().map(|s| s.as_str()).collect();
+            // Split by semicolons and execute each command
+            let commands: Vec<&str> = input.split(';').map(|cmd| cmd.trim()).collect();
 
-            match command.as_str() {
-                "exit" => return Ok(false),
-                "alias" => {
-                    if args.is_empty() {
-                        for (name, value) in aliases.iter() {
-                            println!("alias {}=\"{}\"", name, value);
-                        }
-                    } else if args.len() == 1 && args[0].contains('=') {
-                        let alias_def = args[0];
-                        if let Some(eq_pos) = alias_def.find('=') {
-                            let name = alias_def[..eq_pos].to_string();
-                            let value = alias_def[eq_pos + 1..].trim_matches('"').to_string();
-                            aliases.insert(name, value);
-                        }
-                    } else {
-                        eprintln!("{}: Usage: alias [name=value]", "alias".red().bold());
-                    }
+            for cmd_input in commands {
+                if cmd_input.is_empty() {
+                    continue;
                 }
-                "edit" => {
-                    let editor = env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
-                    let last_command = if args.is_empty() {
-                        rl.history()
-                            .into_iter()
-                            .rev()
-                            .nth(1)
-                            .map(|entry| entry.to_string())
-                    } else {
-                        Some(args.join(" "))
-                    };
 
-                    if let Some(cmd) = last_command {
-                        let temp_file_path = Path::new("/tmp/last_command");
-                        std::fs::write(temp_file_path, cmd)?;
-                        let status = Command::new(editor).arg(temp_file_path).status()?;
-                        if status.success() {
-                            let edited_command = std::fs::read_to_string(temp_file_path)?;
-                            let edited_parts = parse_arguments(edited_command.trim());
-                            if !edited_parts.is_empty() {
-                                let edited_cmd = &edited_parts[0];
-                                let edited_args: Vec<&str> =
-                                    edited_parts[1..].iter().map(|s| s.as_str()).collect();
-                                execute_command(edited_cmd, &edited_args);
+                let parts = parse_arguments(cmd_input);
+                if parts.is_empty() {
+                    continue;
+                }
+
+                let command = &parts[0];
+                let args: Vec<&str> = parts[1..].iter().map(|s| s.as_str()).collect();
+
+                match command.as_str() {
+                    "exit" => return Ok(false),
+                    "alias" => {
+                        if args.is_empty() {
+                            for (name, value) in aliases.iter() {
+                                println!("alias {}=\"{}\"", name, value);
+                            }
+                        } else if args.len() == 1 && args[0].contains('=') {
+                            let alias_def = args[0];
+                            if let Some(eq_pos) = alias_def.find('=') {
+                                let name = alias_def[..eq_pos].to_string();
+                                let value = alias_def[eq_pos + 1..].trim_matches('"').to_string();
+                                aliases.insert(name, value);
                             }
                         } else {
-                            eprintln!(
-                                "{}: Editor exited with status: {}",
-                                "Warning".yellow().bold(),
-                                status
-                            );
+                            eprintln!("{}: Usage: alias [name=value]", "alias".red().bold());
                         }
-                    } else {
-                        eprintln!("{}: No previous command to edit.", "Info".blue().bold());
                     }
-                }
-                "cd" => {
-                    let target_dir = if args.is_empty() {
-                        dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
-                    } else {
-                        PathBuf::from(args[0])
-                    };
-
-                    if let Err(e) = env::set_current_dir(&target_dir) {
-                        eprintln!("{}: {}: {}", "cd".red().bold(), target_dir.display(), e);
-                    }
-                }
-                _ => {
-                    let expanded_command = if let Some(alias_value) = aliases.get(command) {
-                        alias_value.clone()
-                    } else {
-                        command.clone()
-                    };
-
-                    if input.contains('|') {
-                        let pipe_parts: Vec<&str> = input.split('|').collect();
-                        let commands: Vec<Vec<String>> = pipe_parts
-                            .iter()
-                            .map(|part| {
-                                let mut parsed = parse_arguments(part.trim());
-                                if !parsed.is_empty() {
-                                    if let Some(alias_value) = aliases.get(&parsed[0]) {
-                                        let alias_parts = parse_arguments(alias_value);
-                                        parsed.splice(0..1, alias_parts);
-                                    }
-                                }
-                                parsed
-                            })
-                            .collect();
-                        execute_piped_commands(commands);
-                    } else {
-                        if expanded_command != *command {
-                            let expanded_parts = parse_arguments(&expanded_command);
-                            let mut final_args = expanded_parts.clone();
-                            final_args.extend_from_slice(
-                                &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-                            );
-                            let final_command = &final_args[0];
-                            let final_arg_refs: Vec<&str> =
-                                final_args[1..].iter().map(|s| s.as_str()).collect();
-                            execute_command(final_command, &final_arg_refs);
+                    "edit" => {
+                        let editor = env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+                        let last_command = if args.is_empty() {
+                            rl.history()
+                                .into_iter()
+                                .rev()
+                                .nth(1)
+                                .map(|entry| entry.to_string())
                         } else {
-                            execute_command(command, &args);
+                            Some(args.join(" "))
+                        };
+
+                        if let Some(cmd) = last_command {
+                            let temp_file_path = Path::new("/tmp/last_command");
+                            std::fs::write(temp_file_path, cmd)?;
+                            let status = Command::new(editor).arg(temp_file_path).status()?;
+                            if status.success() {
+                                let edited_command = std::fs::read_to_string(temp_file_path)?;
+                                let edited_parts = parse_arguments(edited_command.trim());
+                                if !edited_parts.is_empty() {
+                                    let edited_cmd = &edited_parts[0];
+                                    let edited_args: Vec<&str> =
+                                        edited_parts[1..].iter().map(|s| s.as_str()).collect();
+                                    execute_command(edited_cmd, &edited_args);
+                                }
+                            } else {
+                                eprintln!(
+                                    "{}: Editor exited with status: {}",
+                                    "Warning".yellow().bold(),
+                                    status
+                                );
+                            }
+                        } else {
+                            eprintln!("{}: No previous command to edit.", "Info".blue().bold());
+                        }
+                    }
+                    "cd" => {
+                        let target_dir = if args.is_empty() {
+                            dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
+                        } else {
+                            PathBuf::from(args[0])
+                        };
+
+                        if let Err(e) = env::set_current_dir(&target_dir) {
+                            eprintln!("{}: {}: {}", "cd".red().bold(), target_dir.display(), e);
+                        }
+                    }
+                    _ => {
+                        let expanded_command = if let Some(alias_value) = aliases.get(command) {
+                            alias_value.clone()
+                        } else {
+                            command.clone()
+                        };
+
+                        if input.contains('|') {
+                            let pipe_parts: Vec<&str> = input.split('|').collect();
+                            let commands: Vec<Vec<String>> = pipe_parts
+                                .iter()
+                                .map(|part| {
+                                    let mut parsed = parse_arguments(part.trim());
+                                    if !parsed.is_empty() {
+                                        if let Some(alias_value) = aliases.get(&parsed[0]) {
+                                            let alias_parts = parse_arguments(alias_value);
+                                            parsed.splice(0..1, alias_parts);
+                                        }
+                                    }
+                                    parsed
+                                })
+                                .collect();
+                            execute_piped_commands(commands);
+                        } else {
+                            if expanded_command != *command {
+                                let expanded_parts = parse_arguments(&expanded_command);
+                                let mut final_args = expanded_parts.clone();
+                                final_args.extend_from_slice(
+                                    &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                                );
+                                let final_command = &final_args[0];
+                                let final_arg_refs: Vec<&str> =
+                                    final_args[1..].iter().map(|s| s.as_str()).collect();
+                                execute_command(final_command, &final_arg_refs);
+                            } else {
+                                execute_command(command, &args);
+                            }
                         }
                     }
                 }
             }
+
             Ok(true)
         }
         Err(ReadlineError::Interrupted) => Ok(true),
@@ -572,11 +587,7 @@ fn read_and_execute(
     } else {
         format!("{}/", current_dir.display())
     };
-    let default_prompt = format!(
-        "{}{} ",
-        display_dir.bright_blue().bold(),
-        ">".bold()
-    );
+    let default_prompt = format!("{}{} ", display_dir.bright_blue().bold(), ">".bold());
 
     let the_prompt = match &prompt {
         Some(cmd) => {
@@ -647,6 +658,13 @@ fn execute_file_commands(
 
                         if let Err(e) = env::set_current_dir(&target_dir) {
                             eprintln!("{}: {}: {}", "cd".red().bold(), target_dir.display(), e);
+                        }
+                    }
+                    "addpath" => {
+                        if args.is_empty() {
+                            eprintln!("{}: Usage: addpath <directory>", "addpath".red().bold());
+                        } else {
+                            todo!("addpath command not implemented yet");
                         }
                     }
                     _ => {

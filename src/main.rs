@@ -563,9 +563,19 @@ fn read_and_execute(
     prompt: &Option<String>,
     aliases: &mut HashMap<String, String>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
+    let current_dir = env::current_dir()?;
+    let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+    let display_dir = if current_dir == home_dir {
+        "~".to_string()
+    } else if let Ok(stripped) = current_dir.strip_prefix(&home_dir) {
+        format!("~/{}/", stripped.display())
+    } else {
+        format!("{}/", current_dir.display())
+    };
     let default_prompt = format!(
-        "{}> ",
-        env::current_dir()?.display().to_string().blue().bold()
+        "{}{} ",
+        display_dir.bright_blue().bold(),
+        ">".bold()
     );
 
     let the_prompt = match &prompt {

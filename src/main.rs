@@ -735,7 +735,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
 
     let prompt = matches.get_one::<String>("prompt").cloned();
-    let file = matches.get_one::<PathBuf>("file").cloned();
+    let file = matches.get_one::<PathBuf>("file").cloned().or_else(|| {
+        let home_dir = dirs::home_dir()?;
+        Some(home_dir.join(".shellrc"))
+    });
 
     run_shell(history_file, prompt, file)
 }

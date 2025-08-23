@@ -415,6 +415,106 @@ fn parse_arguments(input: &str) -> Vec<String> {
     args
 }
 
+fn execute_single_command(
+    command: &str,
+    args: &[&str],
+    aliases: &HashMap<String, String>,
+    allow_pipes: bool,
+    full_input: &str,
+) {
+    match command {
+        "set" => {
+            if args.is_empty() {
+                for (key, value) in env::vars() {
+                    println!("{}={}", key, value);
+                }
+            } else if args.len() == 1 && args[0].contains('=') {
+                let env_def = args[0];
+                if let Some(eq_pos) = env_def.find('=') {
+                    let name = &env_def[..eq_pos];
+                    let value = &env_def[eq_pos + 1..];
+                    unsafe {
+                        env::set_var(name, value);
+                    }
+                }
+            } else if args.len() == 2 {
+                unsafe {
+                    env::set_var(&args[0], &args[1]);
+                }
+            } else {
+                eprintln!(
+                    "{}: Usage: set [VAR=value] or set [VAR] [value]",
+                    "set".red().bold()
+                );
+            }
+        }
+        "alias" => {
+            if args.is_empty() {
+                for (name, value) in aliases.iter() {
+                    println!("alias {}=\"{}\"", name, value);
+                }
+            } else if args.len() == 1 && args[0].contains('=') {
+                eprintln!(
+                    "{}: Cannot modify aliases in this context",
+                    "alias".yellow().bold()
+                );
+            } else {
+                eprintln!("{}: Usage: alias [name=value]", "alias".red().bold());
+            }
+        }
+        "cd" => {
+            let target_dir = if args.is_empty() {
+                dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
+            } else {
+                PathBuf::from(args[0])
+            };
+
+            if let Err(e) = env::set_current_dir(&target_dir) {
+                eprintln!("{}: {}: {}", "cd".red().bold(), target_dir.display(), e);
+            }
+        }
+        _ => {
+            let expanded_command = if let Some(alias_value) = aliases.get(command) {
+                alias_value.clone()
+            } else {
+                command.to_string()
+            };
+
+            if allow_pipes && full_input.contains('|') {
+                let pipe_parts: Vec<&str> = full_input.split('|').collect();
+                let commands: Vec<Vec<String>> = pipe_parts
+                    .iter()
+                    .map(|part| {
+                        let mut parsed = parse_arguments(part.trim());
+                        if !parsed.is_empty() {
+                            if let Some(alias_value) = aliases.get(&parsed[0]) {
+                                let alias_parts = parse_arguments(alias_value);
+                                parsed.splice(0..1, alias_parts);
+                            }
+                        }
+                        parsed
+                    })
+                    .collect();
+                execute_piped_commands(commands);
+            } else {
+                if expanded_command != command {
+                    let expanded_parts = parse_arguments(&expanded_command);
+                    let mut final_args = expanded_parts.clone();
+                    final_args.extend_from_slice(
+                        &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                    );
+                    let final_command = &final_args[0];
+                    let final_arg_refs: Vec<&str> =
+                        final_args[1..].iter().map(|s| s.as_str()).collect();
+                    execute_command(final_command, &final_arg_refs);
+                } else {
+                    execute_command(command, args);
+                }
+            }
+        }
+    }
+}
+
 fn execute_piped_commands(commands: Vec<Vec<String>>) {
     if commands.is_empty() {
         return;
@@ -517,31 +617,6 @@ fn handle_line(
 
                 match command.as_str() {
                     "exit" => return Ok(false),
-                    "set" => {
-                        if args.is_empty() {
-                            for (key, value) in env::vars() {
-                                println!("{}={}", key, value);
-                            }
-                        } else if args.len() == 1 && args[0].contains('=') {
-                            let env_def = args[0];
-                            if let Some(eq_pos) = env_def.find('=') {
-                                let name = &env_def[..eq_pos];
-                                let value = &env_def[eq_pos + 1..];
-                                unsafe {
-                                    env::set_var(name, value);
-                                }
-                            }
-                        } else if args.len() == 2 {
-                            unsafe {
-                                env::set_var(&args[0], &args[1]);
-                            }
-                        } else {
-                            eprintln!(
-                                "{}: Usage: set [VAR=value] or set [VAR] [value]",
-                                "set".red().bold()
-                            );
-                        }
-                    }
                     "alias" => {
                         if args.is_empty() {
                             for (name, value) in aliases.iter() {
@@ -581,7 +656,7 @@ fn handle_line(
                                     let edited_cmd = &edited_parts[0];
                                     let edited_args: Vec<&str> =
                                         edited_parts[1..].iter().map(|s| s.as_str()).collect();
-                                    execute_command(edited_cmd, &edited_args);
+                                    execute_single_command(edited_cmd, &edited_args, aliases, true, edited_command.trim());
                                 }
                             } else {
                                 eprintln!(
@@ -594,55 +669,8 @@ fn handle_line(
                             eprintln!("{}: No previous command to edit.", "Info".blue().bold());
                         }
                     }
-                    "cd" => {
-                        let target_dir = if args.is_empty() {
-                            dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
-                        } else {
-                            PathBuf::from(args[0])
-                        };
-
-                        if let Err(e) = env::set_current_dir(&target_dir) {
-                            eprintln!("{}: {}: {}", "cd".red().bold(), target_dir.display(), e);
-                        }
-                    }
                     _ => {
-                        let expanded_command = if let Some(alias_value) = aliases.get(command) {
-                            alias_value.clone()
-                        } else {
-                            command.clone()
-                        };
-
-                        if input.contains('|') {
-                            let pipe_parts: Vec<&str> = input.split('|').collect();
-                            let commands: Vec<Vec<String>> = pipe_parts
-                                .iter()
-                                .map(|part| {
-                                    let mut parsed = parse_arguments(part.trim());
-                                    if !parsed.is_empty() {
-                                        if let Some(alias_value) = aliases.get(&parsed[0]) {
-                                            let alias_parts = parse_arguments(alias_value);
-                                            parsed.splice(0..1, alias_parts);
-                                        }
-                                    }
-                                    parsed
-                                })
-                                .collect();
-                            execute_piped_commands(commands);
-                        } else {
-                            if expanded_command != *command {
-                                let expanded_parts = parse_arguments(&expanded_command);
-                                let mut final_args = expanded_parts.clone();
-                                final_args.extend_from_slice(
-                                    &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-                                );
-                                let final_command = &final_args[0];
-                                let final_arg_refs: Vec<&str> =
-                                    final_args[1..].iter().map(|s| s.as_str()).collect();
-                                execute_command(final_command, &final_arg_refs);
-                            } else {
-                                execute_command(command, &args);
-                            }
-                        }
+                        execute_single_command(command, &args, aliases, true, cmd_input);
                     }
                 }
             }
@@ -719,31 +747,6 @@ fn execute_file_commands(
 
                 match command.as_str() {
                     "exit" => break,
-                    "set" => {
-                        if args.is_empty() {
-                            for (key, value) in env::vars() {
-                                println!("{}={}", key, value);
-                            }
-                        } else if args.len() == 1 && args[0].contains('=') {
-                            let env_def = args[0];
-                            if let Some(eq_pos) = env_def.find('=') {
-                                let name = &env_def[..eq_pos];
-                                let value = &env_def[eq_pos + 1..];
-                                unsafe {
-                                    env::set_var(name, value);
-                                }
-                            }
-                        } else if args.len() == 2 {
-                            unsafe {
-                                env::set_var(&args[0], &args[1]);
-                            }
-                        } else {
-                            eprintln!(
-                                "{}: Usage: set [VAR=value] or set [VAR] [value]",
-                                "set".red().bold()
-                            );
-                        }
-                    }
                     "alias" => {
                         if args.is_empty() {
                             for (name, value) in aliases.iter() {
@@ -760,17 +763,6 @@ fn execute_file_commands(
                             eprintln!("{}: Usage: alias [name=value]", "alias".red().bold());
                         }
                     }
-                    "cd" => {
-                        let target_dir = if args.is_empty() {
-                            dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
-                        } else {
-                            PathBuf::from(args[0])
-                        };
-
-                        if let Err(e) = env::set_current_dir(&target_dir) {
-                            eprintln!("{}: {}: {}", "cd".red().bold(), target_dir.display(), e);
-                        }
-                    }
                     "addpath" => {
                         if args.is_empty() {
                             eprintln!("{}: Usage: addpath <directory>", "addpath".red().bold());
@@ -779,25 +771,7 @@ fn execute_file_commands(
                         }
                     }
                     _ => {
-                        let expanded_command = if let Some(alias_value) = aliases.get(command) {
-                            alias_value.clone()
-                        } else {
-                            command.clone()
-                        };
-
-                        if expanded_command != *command {
-                            let expanded_parts = parse_arguments(&expanded_command);
-                            let mut final_args = expanded_parts.clone();
-                            final_args.extend_from_slice(
-                                &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-                            );
-                            let final_command = &final_args[0];
-                            let final_arg_refs: Vec<&str> =
-                                final_args[1..].iter().map(|s| s.as_str()).collect();
-                            execute_command(final_command, &final_arg_refs);
-                        } else {
-                            execute_command(command, &args);
-                        }
+                        execute_single_command(command, &args, aliases, false, input);
                     }
                 }
             }

@@ -517,6 +517,31 @@ fn handle_line(
 
                 match command.as_str() {
                     "exit" => return Ok(false),
+                    "set" => {
+                        if args.is_empty() {
+                            for (key, value) in env::vars() {
+                                println!("{}={}", key, value);
+                            }
+                        } else if args.len() == 1 && args[0].contains('=') {
+                            let env_def = args[0];
+                            if let Some(eq_pos) = env_def.find('=') {
+                                let name = &env_def[..eq_pos];
+                                let value = &env_def[eq_pos + 1..];
+                                unsafe {
+                                    env::set_var(name, value);
+                                }
+                            }
+                        } else if args.len() == 2 {
+                            unsafe {
+                                env::set_var(&args[0], &args[1]);
+                            }
+                        } else {
+                            eprintln!(
+                                "{}: Usage: set [VAR=value] or set [VAR] [value]",
+                                "set".red().bold()
+                            );
+                        }
+                    }
                     "alias" => {
                         if args.is_empty() {
                             for (name, value) in aliases.iter() {
@@ -694,6 +719,31 @@ fn execute_file_commands(
 
                 match command.as_str() {
                     "exit" => break,
+                    "set" => {
+                        if args.is_empty() {
+                            for (key, value) in env::vars() {
+                                println!("{}={}", key, value);
+                            }
+                        } else if args.len() == 1 && args[0].contains('=') {
+                            let env_def = args[0];
+                            if let Some(eq_pos) = env_def.find('=') {
+                                let name = &env_def[..eq_pos];
+                                let value = &env_def[eq_pos + 1..];
+                                unsafe {
+                                    env::set_var(name, value);
+                                }
+                            }
+                        } else if args.len() == 2 {
+                            unsafe {
+                                env::set_var(&args[0], &args[1]);
+                            }
+                        } else {
+                            eprintln!(
+                                "{}: Usage: set [VAR=value] or set [VAR] [value]",
+                                "set".red().bold()
+                            );
+                        }
+                    }
                     "alias" => {
                         if args.is_empty() {
                             for (name, value) in aliases.iter() {

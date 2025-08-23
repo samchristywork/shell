@@ -3,6 +3,14 @@ name = "shell"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "shell"
+path = "src/lib.rs"
+
+[[bin]]
+name = "shell"
+path = "src/main.rs"
+
 [dependencies]
 clap = { version = "4.5.45", features = ["cargo"] }
 dirs = "6.0.0"

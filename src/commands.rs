@@ -1,6 +1,6 @@
 use crate::parser::parse_arguments;
 use colored::*;
-use rustyline::{history::FileHistory, Editor};
+use rustyline::{Editor, history::FileHistory};
 use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -230,6 +230,52 @@ pub fn handle_builtin_command(
             }
             Ok(Some(true))
         }
+        "path" => {
+            if args.is_empty() {
+                if let Ok(path) = env::var("PATH") {
+                    println!("{}", path);
+                } else {
+                    println!("");
+                }
+            } else if args.len() == 1 {
+                let new_path = args[0];
+                let expanded_path = if new_path.starts_with("~") {
+                    let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+                    home_dir.join(&new_path[2..]).to_string_lossy().to_string()
+                } else {
+                    new_path.to_string()
+                };
+
+                let path_buf = PathBuf::from(&expanded_path);
+                if !path_buf.exists() {
+                    eprintln!(
+                        "{}: Directory does not exist: {}",
+                        "path".red().bold(),
+                        expanded_path
+                    );
+                } else if !path_buf.is_dir() {
+                    eprintln!(
+                        "{}: Not a directory: {}",
+                        "path".red().bold(),
+                        expanded_path
+                    );
+                } else {
+                    let current_path = env::var("PATH").unwrap_or_default();
+                    let new_full_path = if current_path.is_empty() {
+                        expanded_path.clone()
+                    } else {
+                        format!("{}:{}", expanded_path, current_path)
+                    };
+                    unsafe {
+                        env::set_var("PATH", new_full_path);
+                    }
+                    println!("{}: Added {} to PATH", "path".green().bold(), expanded_path);
+                }
+            } else {
+                eprintln!("{}: Usage: path [directory]", "path".red().bold());
+            }
+            Ok(Some(true))
+        }
         "edit" => {
             let editor = env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
             let last_command = if args.is_empty() {
@@ -316,11 +362,54 @@ pub fn execute_file_commands(
                             eprintln!("{}: Usage: alias [name=value]", "alias".red().bold());
                         }
                     }
-                    "addpath" => {
+                    "path" => {
                         if args.is_empty() {
-                            eprintln!("{}: Usage: addpath <directory>", "addpath".red().bold());
+                            if let Ok(path) = env::var("PATH") {
+                                println!("{}", path);
+                            } else {
+                                println!("");
+                            }
+                        } else if args.len() == 1 {
+                            let new_path = args[0];
+                            let expanded_path = if new_path.starts_with("~") {
+                                let home_dir =
+                                    dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+                                home_dir.join(&new_path[2..]).to_string_lossy().to_string()
+                            } else {
+                                new_path.to_string()
+                            };
+
+                            let path_buf = PathBuf::from(&expanded_path);
+                            if !path_buf.exists() {
+                                eprintln!(
+                                    "{}: Directory does not exist: {}",
+                                    "path".red().bold(),
+                                    expanded_path
+                                );
+                            } else if !path_buf.is_dir() {
+                                eprintln!(
+                                    "{}: Not a directory: {}",
+                                    "path".red().bold(),
+                                    expanded_path
+                                );
+                            } else {
+                                let current_path = env::var("PATH").unwrap_or_default();
+                                let new_full_path = if current_path.is_empty() {
+                                    expanded_path.clone()
+                                } else {
+                                    format!("{}:{}", expanded_path, current_path)
+                                };
+                                unsafe {
+                                    env::set_var("PATH", new_full_path);
+                                }
+                                println!(
+                                    "{}: Added {} to PATH",
+                                    "path".green().bold(),
+                                    expanded_path
+                                );
+                            }
                         } else {
-                            todo!("addpath command not implemented yet");
+                            eprintln!("{}: Usage: path [directory]", "path".red().bold());
                         }
                     }
                     _ => {

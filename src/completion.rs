@@ -262,8 +262,8 @@ impl Completer for ShellCompleter {
     }
 }
 
-pub fn create_editor(
-) -> Result<Editor<ShellHelper, rustyline::history::FileHistory>, Box<dyn std::error::Error>> {
+pub fn create_editor()
+-> Result<Editor<ShellHelper, rustyline::history::FileHistory>, Box<dyn std::error::Error>> {
     let config = Config::builder()
         .completion_type(CompletionType::List)
         .build();

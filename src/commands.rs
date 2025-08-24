@@ -64,7 +64,7 @@ pub fn execute_single_command(
                 }
             } else if args.len() == 2 {
                 unsafe {
-                    env::set_var(&args[0], &args[1]);
+                    env::set_var(args[0], args[1]);
                 }
             } else {
                 eprintln!(
@@ -98,14 +98,13 @@ pub fn execute_single_command(
                     if let Some(prev_dir) = prev_dir_guard.as_ref() {
                         prev_dir.clone()
                     } else {
-                        eprintln!("{}: {}: No previous directory", "cd".red().bold(), "-");
+                        eprintln!("{}: -: No previous directory", "cd".red().bold());
                         return;
                     }
                 } else {
                     eprintln!(
-                        "{}: {}: Failed to access previous directory",
-                        "cd".red().bold(),
-                        "-"
+                        "{}: -: Failed to access previous directory",
+                        "cd".red().bold()
                     );
                     return;
                 }
@@ -159,19 +158,17 @@ pub fn execute_single_command(
                     })
                     .collect();
                 execute_piped_commands(commands);
+            } else if expanded_command != command {
+                let expanded_parts = parse_arguments(&expanded_command);
+                let mut final_args = expanded_parts.clone();
+                final_args
+                    .extend_from_slice(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+                let final_command = &final_args[0];
+                let final_arg_refs: Vec<&str> =
+                    final_args[1..].iter().map(|s| s.as_str()).collect();
+                execute_command(final_command, &final_arg_refs);
             } else {
-                if expanded_command != command {
-                    let expanded_parts = parse_arguments(&expanded_command);
-                    let mut final_args = expanded_parts.clone();
-                    final_args
-                        .extend_from_slice(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>());
-                    let final_command = &final_args[0];
-                    let final_arg_refs: Vec<&str> =
-                        final_args[1..].iter().map(|s| s.as_str()).collect();
-                    execute_command(final_command, &final_arg_refs);
-                } else {
-                    execute_command(command, args);
-                }
+                execute_command(command, args);
             }
         }
     }
@@ -276,7 +273,7 @@ pub fn handle_builtin_command(
                 if let Ok(path) = env::var("PATH") {
                     println!("{}", path);
                 } else {
-                    println!("");
+                    println!();
                 }
             } else if args.len() == 1 {
                 let new_path = args[0];
@@ -408,7 +405,7 @@ pub fn execute_file_commands(
                             if let Ok(path) = env::var("PATH") {
                                 println!("{}", path);
                             } else {
-                                println!("");
+                                println!();
                             }
                         } else if args.len() == 1 {
                             let new_path = args[0];

@@ -18,6 +18,12 @@ pub struct ShellHelper {
     highlighter: MatchingBracketHighlighter,
 }
 
+impl Default for ShellHelper {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ShellHelper {
     pub fn new() -> ShellHelper {
         ShellHelper {
@@ -131,9 +137,9 @@ impl ShellCompleter {
     fn get_filename_completions(partial_path: &str) -> Vec<Pair> {
         let mut candidates = Vec::new();
 
-        let expanded_path = if partial_path.starts_with("~/") {
+        let expanded_path = if let Some(stripped) = partial_path.strip_prefix("~/") {
             if let Some(home) = dirs::home_dir() {
-                home.join(&partial_path[2..]).to_string_lossy().to_string()
+                home.join(stripped).to_string_lossy().to_string()
             } else {
                 partial_path.to_string()
             }
@@ -166,7 +172,7 @@ impl ShellCompleter {
             for entry in entries.flatten() {
                 if let Some(name) = entry.file_name().to_str() {
                     if name.starts_with(filename_prefix) {
-                        let is_dir = entry.file_type().map_or(false, |ft| ft.is_dir());
+                        let is_dir = entry.file_type().is_ok_and(|ft| ft.is_dir());
                         let display_name = if is_dir {
                             format!("{}/", name)
                         } else {

@@ -26,7 +26,7 @@ pub fn expand_variables(input: &str) -> String {
                     let mut var_name = String::new();
                     let mut found_closing = false;
 
-                    while let Some(c) = chars.next() {
+                    for c in chars.by_ref() {
                         if c == '}' {
                             found_closing = true;
                             break;

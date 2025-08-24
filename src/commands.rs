@@ -5,6 +5,9 @@ use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
+
+static PREVIOUS_DIR: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 
 pub fn execute_command(command: &str, args: &[&str]) {
     let mut cmd = Command::new(command);
@@ -85,14 +88,52 @@ pub fn execute_single_command(
             }
         }
         "cd" => {
+            let current_dir = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
             let target_dir = if args.is_empty() {
                 dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
+            } else if args[0] == "-" {
+                let prev_dir_mutex = PREVIOUS_DIR.get_or_init(|| Mutex::new(None));
+                if let Ok(prev_dir_guard) = prev_dir_mutex.lock() {
+                    if let Some(prev_dir) = prev_dir_guard.as_ref() {
+                        prev_dir.clone()
+                    } else {
+                        eprintln!("{}: {}: No previous directory", "cd".red().bold(), "-");
+                        return;
+                    }
+                } else {
+                    eprintln!(
+                        "{}: {}: Failed to access previous directory",
+                        "cd".red().bold(),
+                        "-"
+                    );
+                    return;
+                }
             } else {
-                PathBuf::from(args[0])
+                let path = args[0];
+                if path.starts_with("~") {
+                    let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+                    if path == "~" {
+                        home_dir
+                    } else {
+                        home_dir.join(&path[2..])
+                    }
+                } else {
+                    PathBuf::from(path)
+                }
             };
 
             if let Err(e) = env::set_current_dir(&target_dir) {
                 eprintln!("{}: {}: {}", "cd".red().bold(), target_dir.display(), e);
+            } else {
+                let prev_dir_mutex = PREVIOUS_DIR.get_or_init(|| Mutex::new(None));
+                if let Ok(mut prev_dir_guard) = prev_dir_mutex.lock() {
+                    *prev_dir_guard = Some(current_dir);
+                }
+
+                if !args.is_empty() && args[0] == "-" {
+                    println!("{}", target_dir.display());
+                }
             }
         }
         _ => {

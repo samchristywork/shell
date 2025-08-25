@@ -197,7 +197,11 @@ impl ShellCompleter {
                         } else if expanded_path.ends_with('/') {
                             format!("{}{}", expanded_path, name)
                         } else if expanded_path.contains('/') {
-                            format!("{}/{}", dir_path.display(), name)
+                            if dir_path == Path::new("/") {
+                                format!("/{}", name)
+                            } else {
+                                format!("{}/{}", dir_path.display(), name)
+                            }
                         } else {
                             name.to_string()
                         };

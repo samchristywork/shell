@@ -1,3 +1,4 @@
+use glob::glob;
 use std::env;
 
 pub fn expand_tilde(path: &str) -> String {
@@ -22,7 +23,7 @@ pub fn expand_variables(input: &str) -> String {
         if c == '$' {
             if let Some(&next_char) = chars.peek() {
                 if next_char == '{' {
-                    chars.next(); // consume '{'
+                    chars.next();
                     let mut var_name = String::new();
                     let mut found_closing = false;
 
@@ -70,11 +71,38 @@ pub fn expand_variables(input: &str) -> String {
     result
 }
 
+pub fn expand_globs(arg: &str) -> Vec<String> {
+    if arg.contains('*') || arg.contains('?') || arg.contains('[') {
+        match glob(arg) {
+            Ok(paths) => {
+                let mut matches: Vec<String> = paths
+                    .filter_map(|path| path.ok())
+                    .map(|path| path.to_string_lossy().to_string())
+                    .collect();
+
+                matches.sort();
+
+                if matches.is_empty() {
+                    vec![arg.to_string()]
+                } else {
+                    matches
+                }
+            }
+            Err(_) => {
+                vec![arg.to_string()]
+            }
+        }
+    } else {
+        vec![arg.to_string()]
+    }
+}
+
 pub fn parse_arguments(input: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut current_arg = String::new();
     let mut in_quotes = false;
     let mut quote_char = '"';
+    let mut was_quoted = false;
     let mut chars = input.chars().peekable();
 
     while let Some(c) = chars.next() {
@@ -82,6 +110,7 @@ pub fn parse_arguments(input: &str) -> Vec<String> {
             '"' | '\'' if !in_quotes => {
                 in_quotes = true;
                 quote_char = c;
+                was_quoted = true;
             }
             c if in_quotes && c == quote_char => {
                 in_quotes = false;
@@ -89,11 +118,19 @@ pub fn parse_arguments(input: &str) -> Vec<String> {
             ' ' | '\t' if !in_quotes => {
                 if !current_arg.is_empty() {
                     let expanded = expand_variables(&current_arg);
-                    args.push(expand_tilde(&expanded));
+                    let tilde_expanded = expand_tilde(&expanded);
+
+                    if was_quoted {
+                        args.push(tilde_expanded);
+                    } else {
+                        let glob_expanded = expand_globs(&tilde_expanded);
+                        args.extend(glob_expanded);
+                    }
+
                     current_arg.clear();
+                    was_quoted = false;
                 }
 
-                // Skip multiple spaces
                 while let Some(&next_char) = chars.peek() {
                     if next_char == ' ' || next_char == '\t' {
                         chars.next();
@@ -110,7 +147,14 @@ pub fn parse_arguments(input: &str) -> Vec<String> {
 
     if !current_arg.is_empty() {
         let expanded = expand_variables(&current_arg);
-        args.push(expand_tilde(&expanded));
+        let tilde_expanded = expand_tilde(&expanded);
+
+        if was_quoted {
+            args.push(tilde_expanded);
+        } else {
+            let glob_expanded = expand_globs(&tilde_expanded);
+            args.extend(glob_expanded);
+        }
     }
 
     args

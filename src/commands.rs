@@ -3,6 +3,7 @@ use colored::*;
 use rustyline::{Editor, history::FileHistory};
 use std::collections::HashMap;
 use std::env;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
@@ -10,9 +11,33 @@ use std::sync::{Mutex, OnceLock};
 static PREVIOUS_DIR: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 
 pub fn execute_command(command: &str, args: &[&str]) {
+    execute_command_with_redirection(command, args, None);
+}
+
+pub fn execute_command_with_redirection(command: &str, args: &[&str], output_file: Option<&str>) {
     let mut cmd = Command::new(command);
     cmd.args(args);
-    cmd.stdout(Stdio::inherit());
+
+    match output_file {
+        Some(filename) => match File::create(filename) {
+            Ok(file) => {
+                cmd.stdout(Stdio::from(file));
+            }
+            Err(e) => {
+                eprintln!(
+                    "{}: Failed to create file '{}': {}",
+                    "Error".red().bold(),
+                    filename,
+                    e
+                );
+                return;
+            }
+        },
+        None => {
+            cmd.stdout(Stdio::inherit());
+        }
+    }
+
     cmd.stderr(Stdio::inherit());
 
     let mut child = match cmd.spawn() {
@@ -142,7 +167,7 @@ pub fn execute_single_command(
                 command.to_string()
             };
 
-            if allow_pipes && full_input.contains('|') {
+            if allow_pipes && full_input.contains('|') && !full_input.contains('>') {
                 let pipe_parts: Vec<&str> = full_input.split('|').collect();
                 let commands: Vec<Vec<String>> = pipe_parts
                     .iter()
@@ -158,6 +183,46 @@ pub fn execute_single_command(
                     })
                     .collect();
                 execute_piped_commands(commands);
+            } else if full_input.contains('>') {
+                let redirect_parts: Vec<&str> = full_input.splitn(2, '>').collect();
+                if redirect_parts.len() == 2 {
+                    let cmd_part = redirect_parts[0].trim();
+                    let file_part = redirect_parts[1].trim();
+
+                    let cmd_args = parse_arguments(cmd_part);
+                    if !cmd_args.is_empty() {
+                        let cmd_name = &cmd_args[0];
+                        let cmd_arg_refs: Vec<&str> =
+                            cmd_args[1..].iter().map(|s| s.as_str()).collect();
+
+                        if let Some(alias_value) = aliases.get(cmd_name) {
+                            let expanded_parts = parse_arguments(alias_value);
+                            let mut final_args = expanded_parts.clone();
+                            final_args.extend_from_slice(
+                                &cmd_arg_refs
+                                    .iter()
+                                    .map(|s| s.to_string())
+                                    .collect::<Vec<_>>(),
+                            );
+                            execute_command_with_redirection(
+                                &final_args[0],
+                                &final_args[1..]
+                                    .iter()
+                                    .map(|s| s.as_str())
+                                    .collect::<Vec<_>>(),
+                                Some(file_part),
+                            );
+                        } else {
+                            execute_command_with_redirection(
+                                cmd_name,
+                                &cmd_arg_refs,
+                                Some(file_part),
+                            );
+                        }
+                    }
+                } else {
+                    execute_command(command, args);
+                }
             } else if expanded_command != command {
                 let expanded_parts = parse_arguments(&expanded_command);
                 let mut final_args = expanded_parts.clone();

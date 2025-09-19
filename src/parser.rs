@@ -144,7 +144,8 @@ pub fn parse_arguments(input: &str) -> Vec<String> {
             '~' if !in_quotes && current_arg.is_empty() => {
                 let mut tilde_path = String::from("~");
                 while let Some(&nc) = chars.peek() {
-                    if nc == ' ' || nc == '\t' || nc == '/' || nc == '"' || nc == '\'' || nc == ';' {
+                    if nc == ' ' || nc == '\t' || nc == '/' || nc == '"' || nc == '\'' || nc == ';'
+                    {
                         break;
                     }
                     tilde_path.push(chars.next().unwrap());
@@ -207,6 +208,207 @@ pub fn split_commands(input: &str) -> Vec<String> {
 
     if !current_command.trim().is_empty() {
         commands.push(current_command.trim().to_string());
+    }
+
+    commands
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Redirection {
+    None,
+    Stdout(String),
+}
+
+#[derive(Debug)]
+pub struct CommandArgs {
+    pub args: Vec<String>,
+    pub redirection: Redirection,
+}
+
+pub fn parse_full_command(input: &str) -> Vec<CommandArgs> {
+    let mut commands = Vec::new();
+    let mut current_args = Vec::new();
+    let mut current_arg = String::new();
+    let mut in_quotes = false;
+    let mut quote_char = '"';
+    let mut was_quoted = false;
+    let mut redirection = Redirection::None;
+    let mut chars = input.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if !in_quotes || (in_quotes && quote_char == '"') => {
+                if let Some(next_c) = chars.next() {
+                    if in_quotes && quote_char == '"' {
+                        if next_c == '$' || next_c == '"' || next_c == '\\' || next_c == '`' {
+                            current_arg.push(next_c);
+                        } else {
+                            current_arg.push('\\');
+                            current_arg.push(next_c);
+                        }
+                    } else {
+                        current_arg.push(next_c);
+                        was_quoted = true;
+                    }
+                } else {
+                    current_arg.push('\\');
+                }
+            }
+            '"' if !in_quotes => {
+                in_quotes = true;
+                quote_char = '"';
+                was_quoted = true;
+            }
+            '\'' if !in_quotes => {
+                in_quotes = true;
+                quote_char = '\'';
+                was_quoted = true;
+            }
+            c if in_quotes && c == quote_char => {
+                in_quotes = false;
+            }
+            '|' if !in_quotes => {
+                if !current_arg.is_empty() || was_quoted {
+                    if was_quoted {
+                        current_args.push(current_arg.clone());
+                    } else {
+                        current_args.extend(expand_globs(&current_arg));
+                    }
+                    current_arg.clear();
+                    was_quoted = false;
+                }
+                commands.push(CommandArgs {
+                    args: current_args.clone(),
+                    redirection: redirection,
+                });
+                current_args.clear();
+                redirection = Redirection::None;
+            }
+            '>' if !in_quotes => {
+                if !current_arg.is_empty() || was_quoted {
+                    if was_quoted {
+                        current_args.push(current_arg.clone());
+                    } else {
+                        current_args.extend(expand_globs(&current_arg));
+                    }
+                    current_arg.clear();
+                    was_quoted = false;
+                }
+
+                // Consume filename
+                let mut filename = String::new();
+                while let Some(&nc) = chars.peek() {
+                    if nc == ' ' || nc == '\t' || nc == '|' || nc == '>' || nc == ';' {
+                        break;
+                    }
+                    filename.push(chars.next().unwrap());
+                }
+                if filename.is_empty() {
+                    // Try to find filename after potential spaces
+                    while let Some(&nc) = chars.peek() {
+                        if nc == ' ' || nc == '\t' {
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    while let Some(&nc) = chars.peek() {
+                        if nc == ' ' || nc == '\t' || nc == '|' || nc == '>' || nc == ';' {
+                            break;
+                        }
+                        filename.push(chars.next().unwrap());
+                    }
+                }
+                redirection = Redirection::Stdout(filename);
+            }
+            ' ' | '\t' if !in_quotes => {
+                if !current_arg.is_empty() || was_quoted {
+                    if was_quoted {
+                        current_args.push(current_arg.clone());
+                    } else {
+                        current_args.extend(expand_globs(&current_arg));
+                    }
+                    current_arg.clear();
+                    was_quoted = false;
+                }
+            }
+            '$' if !in_quotes || (in_quotes && quote_char == '"') => {
+                if let Some(&next_char) = chars.peek() {
+                    if next_char == '{' {
+                        chars.next();
+                        let mut var_name = String::new();
+                        let mut found_closing = false;
+                        while let Some(nc) = chars.next() {
+                            if nc == '}' {
+                                found_closing = true;
+                                break;
+                            }
+                            var_name.push(nc);
+                        }
+                        if found_closing {
+                            if let Ok(value) = env::var(&var_name) {
+                                current_arg.push_str(&value);
+                            }
+                        } else {
+                            current_arg.push_str("${");
+                            current_arg.push_str(&var_name);
+                        }
+                    } else if next_char.is_alphabetic() || next_char == '_' {
+                        let mut var_name = String::new();
+                        while let Some(&nc) = chars.peek() {
+                            if nc.is_alphanumeric() || nc == '_' {
+                                var_name.push(chars.next().unwrap());
+                            } else {
+                                break;
+                            }
+                        }
+                        if let Ok(value) = env::var(&var_name) {
+                            current_arg.push_str(&value);
+                        }
+                    } else {
+                        current_arg.push('$');
+                    }
+                } else {
+                    current_arg.push('$');
+                }
+            }
+            '~' if !in_quotes && current_arg.is_empty() => {
+                let mut tilde_path = String::from("~");
+                while let Some(&nc) = chars.peek() {
+                    if nc == ' '
+                        || nc == '\t'
+                        || nc == '/'
+                        || nc == '"'
+                        || nc == '\''
+                        || nc == ';'
+                        || nc == '|'
+                        || nc == '>'
+                    {
+                        break;
+                    }
+                    tilde_path.push(chars.next().unwrap());
+                }
+                current_arg.push_str(&expand_tilde(&tilde_path));
+            }
+            _ => {
+                current_arg.push(c);
+            }
+        }
+    }
+
+    if !current_arg.is_empty() || was_quoted {
+        if was_quoted {
+            current_args.push(current_arg);
+        } else {
+            current_args.extend(expand_globs(&current_arg));
+        }
+    }
+
+    if !current_args.is_empty() || redirection != Redirection::None {
+        commands.push(CommandArgs {
+            args: current_args,
+            redirection,
+        });
     }
 
     commands

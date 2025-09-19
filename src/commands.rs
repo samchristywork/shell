@@ -1,4 +1,4 @@
-use crate::parser::parse_arguments;
+use crate::parser::{CommandArgs, Redirection, parse_arguments, parse_full_command};
 use colored::*;
 use rustyline::{Editor, history::FileHistory};
 use std::collections::HashMap;
@@ -9,10 +9,6 @@ use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 
 static PREVIOUS_DIR: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
-
-pub fn execute_command(command: &str, args: &[&str]) {
-    execute_command_with_redirection(command, args, None);
-}
 
 pub fn execute_command_with_redirection(command: &str, args: &[&str], output_file: Option<&str>) {
     let mut cmd = Command::new(command);
@@ -65,14 +61,15 @@ pub fn execute_command_with_redirection(command: &str, args: &[&str], output_fil
     }
 }
 
-pub fn execute_single_command(
-    command: &str,
-    args: &[&str],
-    aliases: &HashMap<String, String>,
-    allow_pipes: bool,
-    full_input: &str,
-) {
-    match command {
+pub fn execute_single_command(command_args: CommandArgs, aliases: &HashMap<String, String>) {
+    if command_args.args.is_empty() {
+        return;
+    }
+
+    let command = &command_args.args[0];
+    let args: Vec<&str> = command_args.args[1..].iter().map(|s| s.as_str()).collect();
+
+    match command.as_str() {
         "set" => {
             if args.is_empty() {
                 for (key, value) in env::vars() {
@@ -167,63 +164,12 @@ pub fn execute_single_command(
                 command.to_string()
             };
 
-            if allow_pipes && full_input.contains('|') && !full_input.contains('>') {
-                let pipe_parts: Vec<&str> = full_input.split('|').collect();
-                let commands: Vec<Vec<String>> = pipe_parts
-                    .iter()
-                    .map(|part| {
-                        let mut parsed = parse_arguments(part.trim());
-                        if !parsed.is_empty() {
-                            if let Some(alias_value) = aliases.get(&parsed[0]) {
-                                let alias_parts = parse_arguments(alias_value);
-                                parsed.splice(0..1, alias_parts);
-                            }
-                        }
-                        parsed
-                    })
-                    .collect();
-                execute_piped_commands(commands);
-            } else if full_input.contains('>') {
-                let redirect_parts: Vec<&str> = full_input.splitn(2, '>').collect();
-                if redirect_parts.len() == 2 {
-                    let cmd_part = redirect_parts[0].trim();
-                    let file_part = redirect_parts[1].trim();
+            let output_file = match &command_args.redirection {
+                Redirection::Stdout(filename) => Some(filename.as_str()),
+                Redirection::None => None,
+            };
 
-                    let cmd_args = parse_arguments(cmd_part);
-                    if !cmd_args.is_empty() {
-                        let cmd_name = &cmd_args[0];
-                        let cmd_arg_refs: Vec<&str> =
-                            cmd_args[1..].iter().map(|s| s.as_str()).collect();
-
-                        if let Some(alias_value) = aliases.get(cmd_name) {
-                            let expanded_parts = parse_arguments(alias_value);
-                            let mut final_args = expanded_parts.clone();
-                            final_args.extend_from_slice(
-                                &cmd_arg_refs
-                                    .iter()
-                                    .map(|s| s.to_string())
-                                    .collect::<Vec<_>>(),
-                            );
-                            execute_command_with_redirection(
-                                &final_args[0],
-                                &final_args[1..]
-                                    .iter()
-                                    .map(|s| s.as_str())
-                                    .collect::<Vec<_>>(),
-                                Some(file_part),
-                            );
-                        } else {
-                            execute_command_with_redirection(
-                                cmd_name,
-                                &cmd_arg_refs,
-                                Some(file_part),
-                            );
-                        }
-                    }
-                } else {
-                    execute_command(command, args);
-                }
-            } else if expanded_command != command {
+            if expanded_command != *command {
                 let expanded_parts = parse_arguments(&expanded_command);
                 let mut final_args = expanded_parts.clone();
                 final_args
@@ -231,38 +177,34 @@ pub fn execute_single_command(
                 let final_command = &final_args[0];
                 let final_arg_refs: Vec<&str> =
                     final_args[1..].iter().map(|s| s.as_str()).collect();
-                execute_command(final_command, &final_arg_refs);
+                execute_command_with_redirection(final_command, &final_arg_refs, output_file);
             } else {
-                execute_command(command, args);
+                execute_command_with_redirection(command, &args, output_file);
             }
         }
     }
 }
 
-pub fn execute_piped_commands(commands: Vec<Vec<String>>) {
+pub fn execute_piped_commands(commands: Vec<CommandArgs>, aliases: &HashMap<String, String>) {
     if commands.is_empty() {
         return;
     }
 
     if commands.len() == 1 {
-        let cmd = &commands[0];
-        if !cmd.is_empty() {
-            let cmd_args: Vec<&str> = cmd[1..].iter().map(|s| s.as_str()).collect();
-            execute_command(&cmd[0], &cmd_args);
-        }
+        execute_single_command(commands.into_iter().next().unwrap(), aliases);
         return;
     }
 
     let mut children = Vec::new();
     let mut previous_stdout = None;
 
-    for (i, cmd_parts) in commands.iter().enumerate() {
-        if cmd_parts.is_empty() {
+    for (i, cmd_args) in commands.iter().enumerate() {
+        if cmd_args.args.is_empty() {
             continue;
         }
 
-        let command = &cmd_parts[0];
-        let args: Vec<&str> = cmd_parts[1..].iter().map(|s| s.as_str()).collect();
+        let command = &cmd_args.args[0];
+        let args: Vec<&str> = cmd_args.args[1..].iter().map(|s| s.as_str()).collect();
 
         let mut cmd = Command::new(command);
         cmd.args(args);
@@ -272,7 +214,25 @@ pub fn execute_piped_commands(commands: Vec<Vec<String>>) {
         }
 
         if i == commands.len() - 1 {
-            cmd.stdout(Stdio::inherit());
+            match &cmd_args.redirection {
+                Redirection::Stdout(filename) => match File::create(filename) {
+                    Ok(file) => {
+                        cmd.stdout(Stdio::from(file));
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "{}: Failed to create file '{}': {}",
+                            "Error".red().bold(),
+                            filename,
+                            e
+                        );
+                        return;
+                    }
+                },
+                Redirection::None => {
+                    cmd.stdout(Stdio::inherit());
+                }
+            }
         } else {
             cmd.stdout(Stdio::piped());
         }
@@ -393,23 +353,12 @@ pub fn handle_builtin_command(
 
             if let Some(cmd) = last_command {
                 let temp_file_path = Path::new("/tmp/last_command");
-                std::fs::write(temp_file_path, cmd)?;
+                std::fs::write(temp_file_path, &cmd)?;
                 let status = Command::new(editor).arg(temp_file_path).status()?;
                 if status.success() {
                     let edited_command = std::fs::read_to_string(temp_file_path)?;
-                    let edited_parts = parse_arguments(edited_command.trim());
-                    if !edited_parts.is_empty() {
-                        let edited_cmd = &edited_parts[0];
-                        let edited_args: Vec<&str> =
-                            edited_parts[1..].iter().map(|s| s.as_str()).collect();
-                        execute_single_command(
-                            edited_cmd,
-                            &edited_args,
-                            aliases,
-                            true,
-                            edited_command.trim(),
-                        );
-                    }
+                    let full_commands = parse_full_command(edited_command.trim());
+                    execute_piped_commands(full_commands, aliases);
                 } else {
                     eprintln!(
                         "{}: Editor exited with status: {}",
@@ -439,85 +388,97 @@ pub fn execute_file_commands(
                     continue;
                 }
 
-                let parts = parse_arguments(input);
-                if parts.is_empty() {
+                let full_commands = parse_full_command(input);
+                if full_commands.is_empty() {
                     continue;
                 }
 
-                let command = &parts[0];
-                let args: Vec<&str> = parts[1..].iter().map(|s| s.as_str()).collect();
-
-                match command.as_str() {
-                    "exit" => break,
-                    "alias" => {
-                        if args.is_empty() {
-                            for (name, value) in aliases.iter() {
-                                println!("alias {}=\"{}\"", name, value);
-                            }
-                        } else if args.len() == 1 && args[0].contains('=') {
-                            let alias_def = args[0];
-                            if let Some(eq_pos) = alias_def.find('=') {
-                                let name = alias_def[..eq_pos].to_string();
-                                let value = alias_def[eq_pos + 1..].trim_matches('"').to_string();
-                                aliases.insert(name, value);
-                            }
-                        } else {
-                            eprintln!("{}: Usage: alias [name=value]", "alias".red().bold());
-                        }
+                if full_commands.len() == 1 {
+                    let cmd_args = &full_commands[0];
+                    if cmd_args.args.is_empty() {
+                        continue;
                     }
-                    "path" => {
-                        if args.is_empty() {
-                            if let Ok(path) = env::var("PATH") {
-                                println!("{}", path);
-                            } else {
-                                println!();
-                            }
-                        } else if args.len() == 1 {
-                            let new_path = args[0];
-                            let expanded_path = if new_path.starts_with("~") {
-                                let home_dir =
-                                    dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
-                                home_dir.join(&new_path[2..]).to_string_lossy().to_string()
-                            } else {
-                                new_path.to_string()
-                            };
+                    let command = &cmd_args.args[0];
+                    let args: Vec<&str> = cmd_args.args[1..].iter().map(|s| s.as_str()).collect();
 
-                            let path_buf = PathBuf::from(&expanded_path);
-                            if !path_buf.exists() {
-                                eprintln!(
-                                    "{}: Directory does not exist: {}",
-                                    "path".red().bold(),
-                                    expanded_path
-                                );
-                            } else if !path_buf.is_dir() {
-                                eprintln!(
-                                    "{}: Not a directory: {}",
-                                    "path".red().bold(),
-                                    expanded_path
-                                );
-                            } else {
-                                let current_path = env::var("PATH").unwrap_or_default();
-                                let new_full_path = if current_path.is_empty() {
-                                    expanded_path.clone()
-                                } else {
-                                    format!("{}:{}", expanded_path, current_path)
-                                };
-                                unsafe {
-                                    env::set_var("PATH", new_full_path);
+                    match command.as_str() {
+                        "exit" => break,
+                        "alias" => {
+                            if args.is_empty() {
+                                for (name, value) in aliases.iter() {
+                                    println!("alias {}=\"{}\"", name, value);
                                 }
-                                println!(
-                                    "{}: Added {} to PATH",
-                                    "path".green().bold(),
-                                    expanded_path
-                                );
+                            } else if args.len() == 1 && args[0].contains('=') {
+                                let alias_def = args[0];
+                                if let Some(eq_pos) = alias_def.find('=') {
+                                    let name = alias_def[..eq_pos].to_string();
+                                    let value =
+                                        alias_def[eq_pos + 1..].trim_matches('"').to_string();
+                                    aliases.insert(name, value);
+                                }
+                            } else {
+                                eprintln!("{}: Usage: alias [name=value]", "alias".red().bold());
                             }
-                        } else {
-                            eprintln!("{}: Usage: path [directory]", "path".red().bold());
+                        }
+                        "path" => {
+                            if args.is_empty() {
+                                if let Ok(path) = env::var("PATH") {
+                                    println!("{}", path);
+                                } else {
+                                    println!();
+                                }
+                            } else if args.len() == 1 {
+                                let new_path = args[0];
+                                let expanded_path = if new_path.starts_with("~") {
+                                    let home_dir =
+                                        dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+                                    home_dir.join(&new_path[2..]).to_string_lossy().to_string()
+                                } else {
+                                    new_path.to_string()
+                                };
+
+                                let path_buf = PathBuf::from(&expanded_path);
+                                if !path_buf.exists() {
+                                    eprintln!(
+                                        "{}: Directory does not exist: {}",
+                                        "path".red().bold(),
+                                        expanded_path
+                                    );
+                                } else if !path_buf.is_dir() {
+                                    eprintln!(
+                                        "{}: Not a directory: {}",
+                                        "path".red().bold(),
+                                        expanded_path
+                                    );
+                                } else {
+                                    let current_path = env::var("PATH").unwrap_or_default();
+                                    let new_full_path = if current_path.is_empty() {
+                                        expanded_path.clone()
+                                    } else {
+                                        format!("{}:{}", expanded_path, current_path)
+                                    };
+                                    unsafe {
+                                        env::set_var("PATH", new_full_path);
+                                    }
+                                    println!(
+                                        "{}: Added {} to PATH",
+                                        "path".green().bold(),
+                                        expanded_path
+                                    );
+                                }
+                            } else {
+                                eprintln!("{}: Usage: path [directory]", "path".red().bold());
+                            }
+                        }
+                        _ => {
+                            execute_single_command(
+                                full_commands.into_iter().next().unwrap(),
+                                aliases,
+                            );
                         }
                     }
-                    _ => {
-                        execute_single_command(command, &args, aliases, false, input);
-                    }
+                } else {
+                    execute_piped_commands(full_commands, aliases);
                 }
             }
         } else {

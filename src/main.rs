@@ -4,9 +4,9 @@ mod parser;
 
 use clap::{arg, command, value_parser};
 use colored::*;
-use commands::{execute_file_commands, execute_single_command, handle_builtin_command};
+use commands::{execute_file_commands, execute_piped_commands, handle_builtin_command};
 use completion::{ShellHelper, create_editor};
-use parser::{parse_arguments, split_commands};
+use parser::{parse_full_command, split_commands};
 use rustyline::Editor;
 use rustyline::error::ReadlineError;
 use signal_hook::{consts::SIGINT, iterator::Signals};
@@ -40,21 +40,31 @@ fn handle_line(
                     continue;
                 }
 
-                let parts = parse_arguments(cmd_input);
-                if parts.is_empty() {
+                let full_commands = parse_full_command(cmd_input);
+                if full_commands.is_empty() {
                     continue;
                 }
 
-                let command = &parts[0];
-                let args: Vec<&str> = parts[1..].iter().map(|s| s.as_str()).collect();
+                if full_commands.len() == 1 {
+                    let cmd_args = &full_commands[0];
+                    if cmd_args.args.is_empty() {
+                        continue;
+                    }
 
-                if let Some(should_continue) = handle_builtin_command(command, &args, rl, aliases)?
-                {
-                    if !should_continue {
-                        return Ok(false);
+                    let command = &cmd_args.args[0];
+                    let args: Vec<&str> = cmd_args.args[1..].iter().map(|s| s.as_str()).collect();
+
+                    if let Some(should_continue) =
+                        handle_builtin_command(command, &args, rl, aliases)?
+                    {
+                        if !should_continue {
+                            return Ok(false);
+                        }
+                    } else {
+                        execute_piped_commands(full_commands, aliases);
                     }
                 } else {
-                    execute_single_command(command, &args, aliases, true, cmd_input);
+                    execute_piped_commands(full_commands, aliases);
                 }
             }
 

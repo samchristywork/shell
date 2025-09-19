@@ -15,62 +15,6 @@ pub fn expand_tilde(path: &str) -> String {
     }
 }
 
-pub fn expand_variables(input: &str) -> String {
-    let mut result = String::new();
-    let mut chars = input.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        if c == '$' {
-            if let Some(&next_char) = chars.peek() {
-                if next_char == '{' {
-                    chars.next();
-                    let mut var_name = String::new();
-                    let mut found_closing = false;
-
-                    for c in chars.by_ref() {
-                        if c == '}' {
-                            found_closing = true;
-                            break;
-                        }
-                        var_name.push(c);
-                    }
-
-                    if found_closing {
-                        if let Ok(value) = env::var(&var_name) {
-                            result.push_str(&value);
-                        }
-                    } else {
-                        result.push_str("${");
-                        result.push_str(&var_name);
-                    }
-                } else if next_char.is_alphabetic() || next_char == '_' {
-                    let mut var_name = String::new();
-
-                    while let Some(&next_char) = chars.peek() {
-                        if next_char.is_alphanumeric() || next_char == '_' {
-                            var_name.push(chars.next().unwrap());
-                        } else {
-                            break;
-                        }
-                    }
-
-                    if let Ok(value) = env::var(&var_name) {
-                        result.push_str(&value);
-                    }
-                } else {
-                    result.push(c);
-                }
-            } else {
-                result.push(c);
-            }
-        } else {
-            result.push(c);
-        }
-    }
-
-    result
-}
-
 pub fn expand_globs(arg: &str) -> Vec<String> {
     if arg.contains('*') || arg.contains('?') || arg.contains('[') {
         match glob(arg) {
@@ -107,26 +51,27 @@ pub fn parse_arguments(input: &str) -> Vec<String> {
 
     while let Some(c) = chars.next() {
         match c {
-            '"' | '\'' if !in_quotes => {
+            '"' if !in_quotes => {
                 in_quotes = true;
-                quote_char = c;
+                quote_char = '"';
+                was_quoted = true;
+            }
+            '\'' if !in_quotes => {
+                in_quotes = true;
+                quote_char = '\'';
                 was_quoted = true;
             }
             c if in_quotes && c == quote_char => {
                 in_quotes = false;
             }
             ' ' | '\t' if !in_quotes => {
-                if !current_arg.is_empty() {
-                    let expanded = expand_variables(&current_arg);
-                    let tilde_expanded = expand_tilde(&expanded);
-
+                if !current_arg.is_empty() || was_quoted {
                     if was_quoted {
-                        args.push(tilde_expanded);
+                        args.push(current_arg.clone());
                     } else {
-                        let glob_expanded = expand_globs(&tilde_expanded);
+                        let glob_expanded = expand_globs(&current_arg);
                         args.extend(glob_expanded);
                     }
-
                     current_arg.clear();
                     was_quoted = false;
                 }
@@ -139,20 +84,67 @@ pub fn parse_arguments(input: &str) -> Vec<String> {
                     }
                 }
             }
+            '$' if !in_quotes || (in_quotes && quote_char == '"') => {
+                if let Some(&next_char) = chars.peek() {
+                    if next_char == '{' {
+                        chars.next();
+                        let mut var_name = String::new();
+                        let mut found_closing = false;
+                        while let Some(nc) = chars.next() {
+                            if nc == '}' {
+                                found_closing = true;
+                                break;
+                            }
+                            var_name.push(nc);
+                        }
+                        if found_closing {
+                            if let Ok(value) = env::var(&var_name) {
+                                current_arg.push_str(&value);
+                            }
+                        } else {
+                            current_arg.push_str("${");
+                            current_arg.push_str(&var_name);
+                        }
+                    } else if next_char.is_alphabetic() || next_char == '_' {
+                        let mut var_name = String::new();
+                        while let Some(&nc) = chars.peek() {
+                            if nc.is_alphanumeric() || nc == '_' {
+                                var_name.push(chars.next().unwrap());
+                            } else {
+                                break;
+                            }
+                        }
+                        if let Ok(value) = env::var(&var_name) {
+                            current_arg.push_str(&value);
+                        }
+                    } else {
+                        current_arg.push('$');
+                    }
+                } else {
+                    current_arg.push('$');
+                }
+            }
+            '~' if !in_quotes && current_arg.is_empty() => {
+                let mut tilde_path = String::from("~");
+                while let Some(&nc) = chars.peek() {
+                    if nc == ' ' || nc == '\t' || nc == '/' || nc == '"' || nc == '\'' || nc == ';' {
+                        break;
+                    }
+                    tilde_path.push(chars.next().unwrap());
+                }
+                current_arg.push_str(&expand_tilde(&tilde_path));
+            }
             _ => {
                 current_arg.push(c);
             }
         }
     }
 
-    if !current_arg.is_empty() {
-        let expanded = expand_variables(&current_arg);
-        let tilde_expanded = expand_tilde(&expanded);
-
+    if !current_arg.is_empty() || was_quoted {
         if was_quoted {
-            args.push(tilde_expanded);
+            args.push(current_arg);
         } else {
-            let glob_expanded = expand_globs(&tilde_expanded);
+            let glob_expanded = expand_globs(&current_arg);
             args.extend(glob_expanded);
         }
     }

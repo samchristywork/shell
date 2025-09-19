@@ -51,6 +51,23 @@ pub fn parse_arguments(input: &str) -> Vec<String> {
 
     while let Some(c) = chars.next() {
         match c {
+            '\\' if !in_quotes || (in_quotes && quote_char == '"') => {
+                if let Some(next_c) = chars.next() {
+                    if in_quotes && quote_char == '"' {
+                        if next_c == '$' || next_c == '"' || next_c == '\\' || next_c == '`' {
+                            current_arg.push(next_c);
+                        } else {
+                            current_arg.push('\\');
+                            current_arg.push(next_c);
+                        }
+                    } else {
+                        current_arg.push(next_c);
+                        was_quoted = true; // Treating escaped char as quoted to prevent globbing/splitting
+                    }
+                } else {
+                    current_arg.push('\\');
+                }
+            }
             '"' if !in_quotes => {
                 in_quotes = true;
                 quote_char = '"';
@@ -161,6 +178,12 @@ pub fn split_commands(input: &str) -> Vec<String> {
 
     while let Some(c) = chars.next() {
         match c {
+            '\\' if !in_quotes || (in_quotes && quote_char == '"') => {
+                current_command.push(c);
+                if let Some(next_c) = chars.next() {
+                    current_command.push(next_c);
+                }
+            }
             '"' | '\'' if !in_quotes => {
                 in_quotes = true;
                 quote_char = c;

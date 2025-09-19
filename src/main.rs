@@ -90,9 +90,9 @@ fn read_and_execute(
     let display_dir = if current_dir == home_dir {
         "~".to_string()
     } else if let Ok(stripped) = current_dir.strip_prefix(&home_dir) {
-        format!("~/{}/", stripped.display())
+        format!("~/{}", stripped.display())
     } else {
-        format!("{}/", current_dir.display())
+        current_dir.display().to_string()
     };
     let default_prompt = format!("{}{} ", display_dir.bright_blue().bold(), ">".bold());
 

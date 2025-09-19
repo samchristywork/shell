@@ -6,7 +6,7 @@ use clap::{arg, command, value_parser};
 use colored::*;
 use commands::{execute_file_commands, execute_single_command, handle_builtin_command};
 use completion::{ShellHelper, create_editor};
-use parser::parse_arguments;
+use parser::{parse_arguments, split_commands};
 use rustyline::Editor;
 use rustyline::error::ReadlineError;
 use signal_hook::{consts::SIGINT, iterator::Signals};
@@ -32,9 +32,10 @@ fn handle_line(
             }
 
             // Split by semicolons and execute each command
-            let commands: Vec<&str> = input.split(';').map(|cmd| cmd.trim()).collect();
+            let commands = split_commands(input);
 
             for cmd_input in commands {
+                let cmd_input = cmd_input.trim();
                 if cmd_input.is_empty() {
                     continue;
                 }

@@ -159,3 +159,40 @@ pub fn parse_arguments(input: &str) -> Vec<String> {
 
     args
 }
+
+pub fn split_commands(input: &str) -> Vec<String> {
+    let mut commands = Vec::new();
+    let mut current_command = String::new();
+    let mut in_quotes = false;
+    let mut quote_char = '"';
+    let mut chars = input.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match c {
+            '"' | '\'' if !in_quotes => {
+                in_quotes = true;
+                quote_char = c;
+                current_command.push(c);
+            }
+            c if in_quotes && c == quote_char => {
+                in_quotes = false;
+                current_command.push(c);
+            }
+            ';' if !in_quotes => {
+                if !current_command.trim().is_empty() {
+                    commands.push(current_command.trim().to_string());
+                }
+                current_command.clear();
+            }
+            _ => {
+                current_command.push(c);
+            }
+        }
+    }
+
+    if !current_command.trim().is_empty() {
+        commands.push(current_command.trim().to_string());
+    }
+
+    commands
+}

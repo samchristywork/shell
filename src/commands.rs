@@ -4,7 +4,7 @@ use rustyline::{Editor, history::FileHistory};
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 
@@ -352,11 +352,15 @@ pub fn handle_builtin_command(
             };
 
             if let Some(cmd) = last_command {
-                let temp_file_path = Path::new("/tmp/last_command");
-                std::fs::write(temp_file_path, &cmd)?;
-                let status = Command::new(editor).arg(temp_file_path).status()?;
+                let mut temp_file = tempfile::NamedTempFile::new()?;
+                use std::io::Write;
+                temp_file.write_all(cmd.as_bytes())?;
+
+                let temp_path = temp_file.path().to_owned();
+                let status = Command::new(editor).arg(&temp_path).status()?;
+
                 if status.success() {
-                    let edited_command = std::fs::read_to_string(temp_file_path)?;
+                    let edited_command = std::fs::read_to_string(&temp_path)?;
                     let full_commands = parse_full_command(edited_command.trim());
                     execute_piped_commands(full_commands, aliases);
                 } else {

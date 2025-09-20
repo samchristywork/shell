@@ -375,6 +375,31 @@ pub fn handle_builtin_command(
 ) -> Result<Option<bool>, Box<dyn std::error::Error>> {
     match command {
         "exit" => Ok(Some(false)),
+        "help" => {
+            println!("{}", "Shell Builtin Commands:".bold().bright_blue());
+            println!("  {:10} - Change the current directory", "cd".green());
+            println!("  {:10} - Set or list environment variables", "set".green());
+            println!("  {:10} - Define or list aliases", "alias".green());
+            println!(
+                "  {:10} - Add a directory to PATH or list PATH",
+                "path".green()
+            );
+            println!("  {:10} - Display the command history", "history".green());
+            println!(
+                "  {:10} - Edit the last or a specific command",
+                "edit".green()
+            );
+            println!("  {:10} - Exit the shell", "exit".green());
+            println!("  {:10} - Display this help message", "help".green());
+            println!("\n{}", "Usage Hints:".bold().bright_blue());
+            println!("  - Use | for piping commands");
+            println!("  - Use > or >> for output redirection");
+            println!("  - Use 2> or 2>> for error redirection");
+            println!("  - Environment variables: $VAR or ${{VAR}}");
+            println!("  - Tilde expansion: ~/path");
+            println!("  - Wildcards: *, ?, [a-z]");
+            Ok(Some(true))
+        }
         "history" => {
             for (i, entry) in rl.history().iter().enumerate() {
                 println!("{:5}  {}", i + 1, entry);

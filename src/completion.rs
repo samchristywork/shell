@@ -113,6 +113,7 @@ impl ShellCompleter {
             "alias".to_string(),
             "set".to_string(),
             "history".to_string(),
+            "help".to_string(),
         ]
     }
 

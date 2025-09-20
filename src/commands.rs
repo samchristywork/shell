@@ -375,6 +375,12 @@ pub fn handle_builtin_command(
 ) -> Result<Option<bool>, Box<dyn std::error::Error>> {
     match command {
         "exit" => Ok(Some(false)),
+        "history" => {
+            for (i, entry) in rl.history().iter().enumerate() {
+                println!("{:5}  {}", i + 1, entry);
+            }
+            Ok(Some(true))
+        }
         "alias" => {
             if args.is_empty() {
                 for (name, value) in aliases.iter() {

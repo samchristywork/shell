@@ -1,5 +1,5 @@
 use glob::glob;
-use std::env;
+use std::collections::HashMap;
 
 pub fn expand_tilde(path: &str) -> String {
     if path == "~" {
@@ -41,7 +41,7 @@ pub fn expand_globs(arg: &str) -> Vec<String> {
     }
 }
 
-pub fn parse_arguments(input: &str) -> Vec<String> {
+pub fn parse_arguments(input: &str, env_map: &HashMap<String, String>) -> Vec<String> {
     let mut args = Vec::new();
     let mut current_arg = String::new();
     let mut in_quotes = false;
@@ -115,8 +115,8 @@ pub fn parse_arguments(input: &str) -> Vec<String> {
                             var_name.push(nc);
                         }
                         if found_closing {
-                            if let Ok(value) = env::var(&var_name) {
-                                current_arg.push_str(&value);
+                            if let Some(value) = env_map.get(&var_name) {
+                                current_arg.push_str(value);
                             }
                         } else {
                             current_arg.push_str("${");
@@ -131,8 +131,8 @@ pub fn parse_arguments(input: &str) -> Vec<String> {
                                 break;
                             }
                         }
-                        if let Ok(value) = env::var(&var_name) {
-                            current_arg.push_str(&value);
+                        if let Some(value) = env_map.get(&var_name) {
+                            current_arg.push_str(value);
                         }
                     } else {
                         current_arg.push('$');
@@ -227,7 +227,7 @@ pub struct CommandArgs {
     pub redirection: Vec<Redirection>,
 }
 
-pub fn parse_full_command(input: &str) -> Vec<CommandArgs> {
+pub fn parse_full_command(input: &str, env_map: &HashMap<String, String>) -> Vec<CommandArgs> {
     let mut commands = Vec::new();
     let mut current_args = Vec::new();
     let mut current_arg = String::new();
@@ -380,8 +380,8 @@ pub fn parse_full_command(input: &str) -> Vec<CommandArgs> {
                             var_name.push(nc);
                         }
                         if found_closing {
-                            if let Ok(value) = env::var(&var_name) {
-                                current_arg.push_str(&value);
+                            if let Some(value) = env_map.get(&var_name) {
+                                current_arg.push_str(value);
                             }
                         } else {
                             current_arg.push_str("${");
@@ -396,8 +396,8 @@ pub fn parse_full_command(input: &str) -> Vec<CommandArgs> {
                                 break;
                             }
                         }
-                        if let Ok(value) = env::var(&var_name) {
-                            current_arg.push_str(&value);
+                        if let Some(value) = env_map.get(&var_name) {
+                            current_arg.push_str(value);
                         }
                     } else {
                         current_arg.push('$');

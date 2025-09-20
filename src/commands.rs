@@ -9,14 +9,16 @@ use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 
 static PREVIOUS_DIR: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
-
 pub fn execute_command_with_redirection(
     command: &str,
     args: &[&str],
     redirections: &[Redirection],
+    env_map: &HashMap<String, String>,
 ) {
     let mut cmd = Command::new(command);
     cmd.args(args);
+    cmd.env_clear();
+    cmd.envs(env_map);
 
     let mut stdout_redirected = false;
     let mut stderr_redirected = false;
@@ -122,7 +124,11 @@ pub fn execute_command_with_redirection(
     }
 }
 
-pub fn execute_single_command(command_args: CommandArgs, aliases: &HashMap<String, String>) {
+pub fn execute_single_command(
+    command_args: CommandArgs,
+    aliases: &HashMap<String, String>,
+    env_map: &mut HashMap<String, String>,
+) {
     if command_args.args.is_empty() {
         return;
     }
@@ -133,22 +139,20 @@ pub fn execute_single_command(command_args: CommandArgs, aliases: &HashMap<Strin
     match command.as_str() {
         "set" => {
             if args.is_empty() {
-                for (key, value) in env::vars() {
+                let mut vars: Vec<_> = env_map.iter().collect();
+                vars.sort_by_key(|a| a.0);
+                for (key, value) in vars {
                     println!("{}={}", key, value);
                 }
             } else if args.len() == 1 && args[0].contains('=') {
                 let env_def = args[0];
                 if let Some(eq_pos) = env_def.find('=') {
-                    let name = &env_def[..eq_pos];
-                    let value = &env_def[eq_pos + 1..];
-                    unsafe {
-                        env::set_var(name, value);
-                    }
+                    let name = env_def[..eq_pos].to_string();
+                    let value = env_def[eq_pos + 1..].to_string();
+                    env_map.insert(name, value);
                 }
             } else if args.len() == 2 {
-                unsafe {
-                    env::set_var(args[0], args[1]);
-                }
+                env_map.insert(args[0].to_string(), args[1].to_string());
             } else {
                 eprintln!(
                     "{}: Usage: set [VAR=value] or set [VAR] [value]",
@@ -226,7 +230,7 @@ pub fn execute_single_command(command_args: CommandArgs, aliases: &HashMap<Strin
             };
 
             if expanded_command != *command {
-                let expanded_parts = parse_arguments(&expanded_command);
+                let expanded_parts = parse_arguments(&expanded_command, env_map);
                 let mut final_args = expanded_parts.clone();
                 final_args
                     .extend_from_slice(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>());
@@ -237,21 +241,31 @@ pub fn execute_single_command(command_args: CommandArgs, aliases: &HashMap<Strin
                     final_command,
                     &final_arg_refs,
                     &command_args.redirection,
+                    env_map,
                 );
             } else {
-                execute_command_with_redirection(command, &args, &command_args.redirection);
+                execute_command_with_redirection(
+                    command,
+                    &args,
+                    &command_args.redirection,
+                    env_map,
+                );
             }
         }
     }
 }
 
-pub fn execute_piped_commands(commands: Vec<CommandArgs>, aliases: &HashMap<String, String>) {
+pub fn execute_piped_commands(
+    commands: Vec<CommandArgs>,
+    aliases: &HashMap<String, String>,
+    env_map: &mut HashMap<String, String>,
+) {
     if commands.is_empty() {
         return;
     }
 
     if commands.len() == 1 {
-        execute_single_command(commands.into_iter().next().unwrap(), aliases);
+        execute_single_command(commands.into_iter().next().unwrap(), aliases, env_map);
         return;
     }
 
@@ -268,6 +282,8 @@ pub fn execute_piped_commands(commands: Vec<CommandArgs>, aliases: &HashMap<Stri
 
         let mut cmd = Command::new(command);
         cmd.args(args);
+        cmd.env_clear();
+        cmd.envs(&*env_map);
 
         if let Some(stdout) = previous_stdout.take() {
             cmd.stdin(stdout);
@@ -355,6 +371,7 @@ pub fn handle_builtin_command(
     args: &[&str],
     rl: &mut Editor<crate::completion::ShellHelper, FileHistory>,
     aliases: &mut HashMap<String, String>,
+    env_map: &mut HashMap<String, String>,
 ) -> Result<Option<bool>, Box<dyn std::error::Error>> {
     match command {
         "exit" => Ok(Some(false)),
@@ -377,7 +394,7 @@ pub fn handle_builtin_command(
         }
         "path" => {
             if args.is_empty() {
-                if let Ok(path) = env::var("PATH") {
+                if let Some(path) = env_map.get("PATH") {
                     println!("{}", path);
                 } else {
                     println!();
@@ -405,15 +422,13 @@ pub fn handle_builtin_command(
                         expanded_path
                     );
                 } else {
-                    let current_path = env::var("PATH").unwrap_or_default();
+                    let current_path = env_map.get("PATH").cloned().unwrap_or_default();
                     let new_full_path = if current_path.is_empty() {
                         expanded_path.clone()
                     } else {
                         format!("{}:{}", expanded_path, current_path)
                     };
-                    unsafe {
-                        env::set_var("PATH", new_full_path);
-                    }
+                    env_map.insert("PATH".to_string(), new_full_path);
                     println!("{}: Added {} to PATH", "path".green().bold(), expanded_path);
                 }
             } else {
@@ -422,7 +437,10 @@ pub fn handle_builtin_command(
             Ok(Some(true))
         }
         "edit" => {
-            let editor = env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+            let editor = env_map
+                .get("EDITOR")
+                .cloned()
+                .unwrap_or_else(|| "vim".to_string());
             let last_command = if args.is_empty() {
                 rl.history()
                     .into_iter()
@@ -443,8 +461,8 @@ pub fn handle_builtin_command(
 
                 if status.success() {
                     let edited_command = std::fs::read_to_string(&temp_path)?;
-                    let full_commands = parse_full_command(edited_command.trim());
-                    execute_piped_commands(full_commands, aliases);
+                    let full_commands = parse_full_command(edited_command.trim(), env_map);
+                    execute_piped_commands(full_commands, aliases, env_map);
                 } else {
                     eprintln!(
                         "{}: Editor exited with status: {}",
@@ -464,6 +482,7 @@ pub fn handle_builtin_command(
 pub fn execute_file_commands(
     file: &Option<PathBuf>,
     aliases: &mut HashMap<String, String>,
+    env_map: &mut HashMap<String, String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(file_path) = file {
         if file_path.exists() {
@@ -474,7 +493,7 @@ pub fn execute_file_commands(
                     continue;
                 }
 
-                let full_commands = parse_full_command(input);
+                let full_commands = parse_full_command(input, env_map);
                 if full_commands.is_empty() {
                     continue;
                 }
@@ -508,7 +527,7 @@ pub fn execute_file_commands(
                         }
                         "path" => {
                             if args.is_empty() {
-                                if let Ok(path) = env::var("PATH") {
+                                if let Some(path) = env_map.get("PATH") {
                                     println!("{}", path);
                                 } else {
                                     println!();
@@ -537,15 +556,14 @@ pub fn execute_file_commands(
                                         expanded_path
                                     );
                                 } else {
-                                    let current_path = env::var("PATH").unwrap_or_default();
+                                    let current_path =
+                                        env_map.get("PATH").cloned().unwrap_or_default();
                                     let new_full_path = if current_path.is_empty() {
                                         expanded_path.clone()
                                     } else {
                                         format!("{}:{}", expanded_path, current_path)
                                     };
-                                    unsafe {
-                                        env::set_var("PATH", new_full_path);
-                                    }
+                                    env_map.insert("PATH".to_string(), new_full_path);
                                     println!(
                                         "{}: Added {} to PATH",
                                         "path".green().bold(),
@@ -560,11 +578,12 @@ pub fn execute_file_commands(
                             execute_single_command(
                                 full_commands.into_iter().next().unwrap(),
                                 aliases,
+                                env_map,
                             );
                         }
                     }
                 } else {
-                    execute_piped_commands(full_commands, aliases);
+                    execute_piped_commands(full_commands, aliases, env_map);
                 }
             }
         } else {

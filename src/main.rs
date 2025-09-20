@@ -21,6 +21,7 @@ fn handle_line(
     readline: Result<String, ReadlineError>,
     _history_file: &Path,
     aliases: &mut HashMap<String, String>,
+    env_map: &mut HashMap<String, String>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     match readline {
         Ok(line) => {
@@ -40,7 +41,7 @@ fn handle_line(
                     continue;
                 }
 
-                let full_commands = parse_full_command(cmd_input);
+                let full_commands = parse_full_command(cmd_input, env_map);
                 if full_commands.is_empty() {
                     continue;
                 }
@@ -55,16 +56,16 @@ fn handle_line(
                     let args: Vec<&str> = cmd_args.args[1..].iter().map(|s| s.as_str()).collect();
 
                     if let Some(should_continue) =
-                        handle_builtin_command(command, &args, rl, aliases)?
+                        handle_builtin_command(command, &args, rl, aliases, env_map)?
                     {
                         if !should_continue {
                             return Ok(false);
                         }
                     } else {
-                        execute_piped_commands(full_commands, aliases);
+                        execute_piped_commands(full_commands, aliases, env_map);
                     }
                 } else {
-                    execute_piped_commands(full_commands, aliases);
+                    execute_piped_commands(full_commands, aliases, env_map);
                 }
             }
 
@@ -84,6 +85,7 @@ fn read_and_execute(
     history_file: &Path,
     prompt: &Option<String>,
     aliases: &mut HashMap<String, String>,
+    env_map: &mut HashMap<String, String>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let current_dir = env::current_dir()?;
     let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
@@ -101,6 +103,8 @@ fn read_and_execute(
             let output = Command::new("sh")
                 .arg("-c")
                 .arg(cmd)
+                .env_clear()
+                .envs(&*env_map)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
                 .output()?;
@@ -114,7 +118,7 @@ fn read_and_execute(
     };
 
     let readline = rl.readline(&the_prompt);
-    handle_line(rl, readline, history_file, aliases)
+    handle_line(rl, readline, history_file, aliases, env_map)
 }
 
 fn run_shell(
@@ -132,8 +136,10 @@ fn run_shell(
     }
 
     let mut aliases = HashMap::new();
-    execute_file_commands(&file, &mut aliases)?;
-    while read_and_execute(&mut rl, &history_file, &prompt, &mut aliases)? {}
+    let mut env_map: HashMap<String, String> = env::vars().collect();
+
+    execute_file_commands(&file, &mut aliases, &mut env_map)?;
+    while read_and_execute(&mut rl, &history_file, &prompt, &mut aliases, &mut env_map)? {}
 
     rl.save_history(&history_file)?;
 

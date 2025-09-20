@@ -3,38 +3,99 @@ use colored::*;
 use rustyline::{Editor, history::FileHistory};
 use std::collections::HashMap;
 use std::env;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 
 static PREVIOUS_DIR: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 
-pub fn execute_command_with_redirection(command: &str, args: &[&str], output_file: Option<&str>) {
+pub fn execute_command_with_redirection(
+    command: &str,
+    args: &[&str],
+    redirections: &[Redirection],
+) {
     let mut cmd = Command::new(command);
     cmd.args(args);
 
-    match output_file {
-        Some(filename) => match File::create(filename) {
-            Ok(file) => {
-                cmd.stdout(Stdio::from(file));
+    let mut stdout_redirected = false;
+    let mut stderr_redirected = false;
+
+    for redir in redirections {
+        match redir {
+            Redirection::Stdout(filename) => match File::create(filename) {
+                Ok(file) => {
+                    cmd.stdout(Stdio::from(file));
+                    stdout_redirected = true;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "{}: Failed to create file '{}': {}",
+                        "Error".red().bold(),
+                        filename,
+                        e
+                    );
+                    return;
+                }
+            },
+            Redirection::StdoutAppend(filename) => {
+                match OpenOptions::new().create(true).append(true).open(filename) {
+                    Ok(file) => {
+                        cmd.stdout(Stdio::from(file));
+                        stdout_redirected = true;
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "{}: Failed to open file '{}' for append: {}",
+                            "Error".red().bold(),
+                            filename,
+                            e
+                        );
+                        return;
+                    }
+                }
             }
-            Err(e) => {
-                eprintln!(
-                    "{}: Failed to create file '{}': {}",
-                    "Error".red().bold(),
-                    filename,
-                    e
-                );
-                return;
+            Redirection::Stderr(filename) => match File::create(filename) {
+                Ok(file) => {
+                    cmd.stderr(Stdio::from(file));
+                    stderr_redirected = true;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "{}: Failed to create file '{}' for stderr: {}",
+                        "Error".red().bold(),
+                        filename,
+                        e
+                    );
+                    return;
+                }
+            },
+            Redirection::StderrAppend(filename) => {
+                match OpenOptions::new().create(true).append(true).open(filename) {
+                    Ok(file) => {
+                        cmd.stderr(Stdio::from(file));
+                        stderr_redirected = true;
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "{}: Failed to open file '{}' for stderr append: {}",
+                            "Error".red().bold(),
+                            filename,
+                            e
+                        );
+                        return;
+                    }
+                }
             }
-        },
-        None => {
-            cmd.stdout(Stdio::inherit());
         }
     }
 
-    cmd.stderr(Stdio::inherit());
+    if !stdout_redirected {
+        cmd.stdout(Stdio::inherit());
+    }
+    if !stderr_redirected {
+        cmd.stderr(Stdio::inherit());
+    }
 
     let mut child = match cmd.spawn() {
         Ok(child) => child,
@@ -164,11 +225,6 @@ pub fn execute_single_command(command_args: CommandArgs, aliases: &HashMap<Strin
                 command.to_string()
             };
 
-            let output_file = match &command_args.redirection {
-                Redirection::Stdout(filename) => Some(filename.as_str()),
-                Redirection::None => None,
-            };
-
             if expanded_command != *command {
                 let expanded_parts = parse_arguments(&expanded_command);
                 let mut final_args = expanded_parts.clone();
@@ -177,9 +233,13 @@ pub fn execute_single_command(command_args: CommandArgs, aliases: &HashMap<Strin
                 let final_command = &final_args[0];
                 let final_arg_refs: Vec<&str> =
                     final_args[1..].iter().map(|s| s.as_str()).collect();
-                execute_command_with_redirection(final_command, &final_arg_refs, output_file);
+                execute_command_with_redirection(
+                    final_command,
+                    &final_arg_refs,
+                    &command_args.redirection,
+                );
             } else {
-                execute_command_with_redirection(command, &args, output_file);
+                execute_command_with_redirection(command, &args, &command_args.redirection);
             }
         }
     }
@@ -214,30 +274,52 @@ pub fn execute_piped_commands(commands: Vec<CommandArgs>, aliases: &HashMap<Stri
         }
 
         if i == commands.len() - 1 {
-            match &cmd_args.redirection {
-                Redirection::Stdout(filename) => match File::create(filename) {
-                    Ok(file) => {
-                        cmd.stdout(Stdio::from(file));
+            let mut stdout_redirected = false;
+            let mut stderr_redirected = false;
+
+            for redir in &cmd_args.redirection {
+                match redir {
+                    Redirection::Stdout(filename) => {
+                        if let Ok(file) = File::create(filename) {
+                            cmd.stdout(Stdio::from(file));
+                            stdout_redirected = true;
+                        }
                     }
-                    Err(e) => {
-                        eprintln!(
-                            "{}: Failed to create file '{}': {}",
-                            "Error".red().bold(),
-                            filename,
-                            e
-                        );
-                        return;
+                    Redirection::StdoutAppend(filename) => {
+                        if let Ok(file) =
+                            OpenOptions::new().create(true).append(true).open(filename)
+                        {
+                            cmd.stdout(Stdio::from(file));
+                            stdout_redirected = true;
+                        }
                     }
-                },
-                Redirection::None => {
-                    cmd.stdout(Stdio::inherit());
+                    Redirection::Stderr(filename) => {
+                        if let Ok(file) = File::create(filename) {
+                            cmd.stderr(Stdio::from(file));
+                            stderr_redirected = true;
+                        }
+                    }
+                    Redirection::StderrAppend(filename) => {
+                        if let Ok(file) =
+                            OpenOptions::new().create(true).append(true).open(filename)
+                        {
+                            cmd.stderr(Stdio::from(file));
+                            stderr_redirected = true;
+                        }
+                    }
                 }
+            }
+
+            if !stdout_redirected {
+                cmd.stdout(Stdio::inherit());
+            }
+            if !stderr_redirected {
+                cmd.stderr(Stdio::inherit());
             }
         } else {
             cmd.stdout(Stdio::piped());
+            cmd.stderr(Stdio::inherit());
         }
-
-        cmd.stderr(Stdio::inherit());
 
         match cmd.spawn() {
             Ok(mut child) => {

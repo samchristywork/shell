@@ -213,16 +213,18 @@ pub fn split_commands(input: &str) -> Vec<String> {
     commands
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Redirection {
-    None,
     Stdout(String),
+    StdoutAppend(String),
+    Stderr(String),
+    StderrAppend(String),
 }
 
 #[derive(Debug)]
 pub struct CommandArgs {
     pub args: Vec<String>,
-    pub redirection: Redirection,
+    pub redirection: Vec<Redirection>,
 }
 
 pub fn parse_full_command(input: &str) -> Vec<CommandArgs> {
@@ -232,7 +234,7 @@ pub fn parse_full_command(input: &str) -> Vec<CommandArgs> {
     let mut in_quotes = false;
     let mut quote_char = '"';
     let mut was_quoted = false;
-    let mut redirection = Redirection::None;
+    let mut redirections = Vec::new();
     let mut chars = input.chars().peekable();
 
     while let Some(c) = chars.next() {
@@ -279,10 +281,40 @@ pub fn parse_full_command(input: &str) -> Vec<CommandArgs> {
                 }
                 commands.push(CommandArgs {
                     args: current_args.clone(),
-                    redirection: redirection,
+                    redirection: redirections.clone(),
                 });
                 current_args.clear();
-                redirection = Redirection::None;
+                redirections.clear();
+            }
+            '2' if !in_quotes && current_arg.is_empty() && chars.peek() == Some(&'>') => {
+                chars.next(); // consume '>'
+                let mut is_append = false;
+                if chars.peek() == Some(&'>') {
+                    is_append = true;
+                    chars.next(); // consume second '>'
+                }
+
+                // Consume filename
+                while let Some(&nc) = chars.peek() {
+                    if nc == ' ' || nc == '\t' {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                let mut filename = String::new();
+                while let Some(&nc) = chars.peek() {
+                    if nc == ' ' || nc == '\t' || nc == '|' || nc == '>' || nc == ';' {
+                        break;
+                    }
+                    filename.push(chars.next().unwrap());
+                }
+
+                if is_append {
+                    redirections.push(Redirection::StderrAppend(filename));
+                } else {
+                    redirections.push(Redirection::Stderr(filename));
+                }
             }
             '>' if !in_quotes => {
                 if !current_arg.is_empty() || was_quoted {
@@ -295,7 +327,20 @@ pub fn parse_full_command(input: &str) -> Vec<CommandArgs> {
                     was_quoted = false;
                 }
 
+                let mut is_append = false;
+                if chars.peek() == Some(&'>') {
+                    is_append = true;
+                    chars.next(); // consume second '>'
+                }
+
                 // Consume filename
+                while let Some(&nc) = chars.peek() {
+                    if nc == ' ' || nc == '\t' {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
                 let mut filename = String::new();
                 while let Some(&nc) = chars.peek() {
                     if nc == ' ' || nc == '\t' || nc == '|' || nc == '>' || nc == ';' {
@@ -303,23 +348,12 @@ pub fn parse_full_command(input: &str) -> Vec<CommandArgs> {
                     }
                     filename.push(chars.next().unwrap());
                 }
-                if filename.is_empty() {
-                    // Try to find filename after potential spaces
-                    while let Some(&nc) = chars.peek() {
-                        if nc == ' ' || nc == '\t' {
-                            chars.next();
-                        } else {
-                            break;
-                        }
-                    }
-                    while let Some(&nc) = chars.peek() {
-                        if nc == ' ' || nc == '\t' || nc == '|' || nc == '>' || nc == ';' {
-                            break;
-                        }
-                        filename.push(chars.next().unwrap());
-                    }
+
+                if is_append {
+                    redirections.push(Redirection::StdoutAppend(filename));
+                } else {
+                    redirections.push(Redirection::Stdout(filename));
                 }
-                redirection = Redirection::Stdout(filename);
             }
             ' ' | '\t' if !in_quotes => {
                 if !current_arg.is_empty() || was_quoted {
@@ -404,10 +438,10 @@ pub fn parse_full_command(input: &str) -> Vec<CommandArgs> {
         }
     }
 
-    if !current_args.is_empty() || redirection != Redirection::None {
+    if !current_args.is_empty() || !redirections.is_empty() {
         commands.push(CommandArgs {
             args: current_args,
-            redirection,
+            redirection: redirections,
         });
     }
 

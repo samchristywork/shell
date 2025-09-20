@@ -84,8 +84,8 @@ fn read_and_execute(
     rl: &mut Editor<ShellHelper, rustyline::history::FileHistory>,
     history_file: &Path,
     prompt: &Option<String>,
-    aliases: &mut HashMap<String, String>,
-    env_map: &mut HashMap<String, String>,
+    aliases: Arc<Mutex<HashMap<String, String>>>,
+    env_map: Arc<Mutex<HashMap<String, String>>>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let current_dir = env::current_dir()?;
     let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
@@ -100,11 +100,12 @@ fn read_and_execute(
 
     let the_prompt = match &prompt {
         Some(cmd) => {
+            let env_map_guard = env_map.lock().unwrap();
             let output = Command::new("sh")
                 .arg("-c")
                 .arg(cmd)
                 .env_clear()
-                .envs(&*env_map)
+                .envs(&*env_map_guard)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
                 .output()?;
@@ -118,7 +119,16 @@ fn read_and_execute(
     };
 
     let readline = rl.readline(&the_prompt);
-    handle_line(rl, readline, history_file, aliases, env_map)
+
+    let mut aliases_guard = aliases.lock().unwrap();
+    let mut env_map_guard = env_map.lock().unwrap();
+    handle_line(
+        rl,
+        readline,
+        history_file,
+        &mut aliases_guard,
+        &mut env_map_guard,
+    )
 }
 
 use std::sync::{Arc, Mutex};
@@ -146,17 +156,13 @@ fn run_shell(
         execute_file_commands(&file, &mut aliases_guard, &mut env_map_guard)?;
     }
 
-    while {
-        let mut aliases_guard = aliases.lock().unwrap();
-        let mut env_map_guard = env_map.lock().unwrap();
-        read_and_execute(
-            &mut rl,
-            &history_file,
-            &prompt,
-            &mut aliases_guard,
-            &mut env_map_guard,
-        )?
-    } {}
+    while read_and_execute(
+        &mut rl,
+        &history_file,
+        &prompt,
+        Arc::clone(&aliases),
+        Arc::clone(&env_map),
+    )? {}
 
     rl.save_history(&history_file)?;
 

@@ -121,6 +121,8 @@ fn read_and_execute(
     handle_line(rl, readline, history_file, aliases, env_map)
 }
 
+use std::sync::{Arc, Mutex};
+
 fn run_shell(
     history_file: PathBuf,
     prompt: Option<String>,
@@ -129,17 +131,32 @@ fn run_shell(
     let mut signals = Signals::new([SIGINT])?;
     thread::spawn(move || for _sig in signals.forever() {});
 
-    let mut rl = create_editor()?;
+    let aliases = Arc::new(Mutex::new(HashMap::new()));
+    let env_map = Arc::new(Mutex::new(env::vars().collect::<HashMap<String, String>>()));
+
+    let mut rl = create_editor(Arc::clone(&aliases), Arc::clone(&env_map))?;
 
     if rl.load_history(&history_file).is_err() {
         println!("{}: No previous history.", "Info".blue().bold());
     }
 
-    let mut aliases = HashMap::new();
-    let mut env_map: HashMap<String, String> = env::vars().collect();
+    {
+        let mut aliases_guard = aliases.lock().unwrap();
+        let mut env_map_guard = env_map.lock().unwrap();
+        execute_file_commands(&file, &mut aliases_guard, &mut env_map_guard)?;
+    }
 
-    execute_file_commands(&file, &mut aliases, &mut env_map)?;
-    while read_and_execute(&mut rl, &history_file, &prompt, &mut aliases, &mut env_map)? {}
+    while {
+        let mut aliases_guard = aliases.lock().unwrap();
+        let mut env_map_guard = env_map.lock().unwrap();
+        read_and_execute(
+            &mut rl,
+            &history_file,
+            &prompt,
+            &mut aliases_guard,
+            &mut env_map_guard,
+        )?
+    } {}
 
     rl.save_history(&history_file)?;
 

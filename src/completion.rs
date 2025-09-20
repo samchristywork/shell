@@ -7,9 +7,11 @@ use rustyline::validate::{MatchingBracketValidator, Validator};
 use rustyline::{CompletionType, Helper};
 use rustyline::{Context, Editor};
 use std::borrow::Cow;
-use std::env;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 pub struct ShellHelper {
     completer: ShellCompleter,
@@ -18,16 +20,13 @@ pub struct ShellHelper {
     highlighter: MatchingBracketHighlighter,
 }
 
-impl Default for ShellHelper {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl ShellHelper {
-    pub fn new() -> ShellHelper {
+    pub fn new(
+        aliases: Arc<Mutex<HashMap<String, String>>>,
+        env_map: Arc<Mutex<HashMap<String, String>>>,
+    ) -> ShellHelper {
         ShellHelper {
-            completer: ShellCompleter::new(),
+            completer: ShellCompleter::new(aliases, env_map),
             hinter: HistoryHinter::new(),
             validator: MatchingBracketValidator::new(),
             highlighter: MatchingBracketHighlighter::new(),
@@ -93,11 +92,17 @@ impl Highlighter for ShellHelper {
     }
 }
 
-struct ShellCompleter;
+struct ShellCompleter {
+    aliases: Arc<Mutex<HashMap<String, String>>>,
+    env_map: Arc<Mutex<HashMap<String, String>>>,
+}
 
 impl ShellCompleter {
-    fn new() -> ShellCompleter {
-        ShellCompleter
+    fn new(
+        aliases: Arc<Mutex<HashMap<String, String>>>,
+        env_map: Arc<Mutex<HashMap<String, String>>>,
+    ) -> ShellCompleter {
+        ShellCompleter { aliases, env_map }
     }
 
     fn get_builtin_commands() -> Vec<String> {
@@ -110,10 +115,15 @@ impl ShellCompleter {
         ]
     }
 
-    fn get_path_commands() -> Vec<String> {
+    fn get_path_commands(&self) -> Vec<String> {
         let mut commands = Vec::new();
 
-        if let Ok(path_var) = env::var("PATH") {
+        let path_var = {
+            let env = self.env_map.lock().unwrap();
+            env.get("PATH").cloned().unwrap_or_default()
+        };
+
+        if !path_var.is_empty() {
             for path in path_var.split(':') {
                 if let Ok(entries) = std::fs::read_dir(path) {
                     for entry in entries.flatten() {
@@ -242,6 +252,7 @@ impl Completer for ShellCompleter {
 
             let mut candidates = Vec::new();
 
+            // Builtins
             for cmd in Self::get_builtin_commands() {
                 if cmd.starts_with(word_to_complete) {
                     candidates.push(Pair {
@@ -251,7 +262,21 @@ impl Completer for ShellCompleter {
                 }
             }
 
-            for cmd in Self::get_path_commands() {
+            // Aliases
+            {
+                let aliases = self.aliases.lock().unwrap();
+                for alias in aliases.keys() {
+                    if alias.starts_with(word_to_complete) {
+                        candidates.push(Pair {
+                            display: format!("{} {}", alias, "(alias)".bright_black()),
+                            replacement: alias.clone(),
+                        });
+                    }
+                }
+            }
+
+            // Path commands
+            for cmd in self.get_path_commands() {
                 if cmd.starts_with(word_to_complete) {
                     candidates.push(Pair {
                         display: cmd.clone(),
@@ -266,18 +291,36 @@ impl Completer for ShellCompleter {
             let current_word_start = line[..pos].rfind(' ').map_or(0, |i| i + 1);
             let word_to_complete = &line[current_word_start..pos];
 
+            if word_to_complete.starts_with('$') {
+                let var_prefix = &word_to_complete[1..];
+                let mut candidates = Vec::new();
+                let env = self.env_map.lock().unwrap();
+                for var in env.keys() {
+                    if var.starts_with(var_prefix) {
+                        candidates.push(Pair {
+                            display: format!("${}", var),
+                            replacement: format!("${}", var),
+                        });
+                    }
+                }
+                candidates.sort_by(|a, b| a.display.cmp(&b.display));
+                return Ok((current_word_start, candidates));
+            }
+
             let candidates = Self::get_filename_completions(word_to_complete);
             Ok((current_word_start, candidates))
         }
     }
 }
 
-pub fn create_editor()
--> Result<Editor<ShellHelper, rustyline::history::FileHistory>, Box<dyn std::error::Error>> {
+pub fn create_editor(
+    aliases: Arc<Mutex<HashMap<String, String>>>,
+    env_map: Arc<Mutex<HashMap<String, String>>>,
+) -> Result<Editor<ShellHelper, rustyline::history::FileHistory>, Box<dyn std::error::Error>> {
     let config = Config::builder()
         .completion_type(CompletionType::List)
         .build();
-    let helper = ShellHelper::new();
+    let helper = ShellHelper::new(aliases, env_map);
     let mut rl = Editor::with_config(config)?;
     rl.set_helper(Some(helper));
     Ok(rl)

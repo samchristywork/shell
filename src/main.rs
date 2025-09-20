@@ -199,7 +199,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .cloned()
         .unwrap_or_else(|| {
             let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
-            home_dir.join("history.txt")
+            home_dir.join(".shell_history")
         });
 
     let prompt = matches.get_one::<String>("prompt").cloned();

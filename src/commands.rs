@@ -126,7 +126,7 @@ pub fn execute_command_with_redirection(
 
 pub fn execute_single_command(
     command_args: CommandArgs,
-    aliases: &HashMap<String, String>,
+    aliases: &mut HashMap<String, String>,
     env_map: &mut HashMap<String, String>,
 ) {
     if command_args.args.is_empty() {
@@ -166,10 +166,12 @@ pub fn execute_single_command(
                     println!("alias {}=\"{}\"", name, value);
                 }
             } else if args.len() == 1 && args[0].contains('=') {
-                eprintln!(
-                    "{}: Cannot modify aliases in this context",
-                    "alias".yellow().bold()
-                );
+                let alias_def = args[0];
+                if let Some(eq_pos) = alias_def.find('=') {
+                    let name = alias_def[..eq_pos].to_string();
+                    let value = alias_def[eq_pos + 1..].trim_matches('"').to_string();
+                    aliases.insert(name, value);
+                }
             } else {
                 eprintln!("{}: Usage: alias [name=value]", "alias".red().bold());
             }
@@ -257,7 +259,7 @@ pub fn execute_single_command(
 
 pub fn execute_piped_commands(
     commands: Vec<CommandArgs>,
-    aliases: &HashMap<String, String>,
+    aliases: &mut HashMap<String, String>,
     env_map: &mut HashMap<String, String>,
 ) {
     if commands.is_empty() {

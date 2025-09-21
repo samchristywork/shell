@@ -326,6 +326,7 @@ pub enum Redirection {
 pub struct CommandArgs {
     pub args: Vec<String>,
     pub redirection: Vec<Redirection>,
+    pub background: bool,
 }
 
 pub fn parse_full_command(input: &str, env_map: &HashMap<String, String>) -> Vec<CommandArgs> {
@@ -336,6 +337,7 @@ pub fn parse_full_command(input: &str, env_map: &HashMap<String, String>) -> Vec
     let mut quote_char = '"';
     let mut was_quoted = false;
     let mut redirections = Vec::new();
+    let mut background = false;
     let mut chars = input.chars().peekable();
 
     while let Some(c) = chars.next() {
@@ -383,9 +385,22 @@ pub fn parse_full_command(input: &str, env_map: &HashMap<String, String>) -> Vec
                 commands.push(CommandArgs {
                     args: current_args.clone(),
                     redirection: redirections.clone(),
+                    background: false,
                 });
                 current_args.clear();
                 redirections.clear();
+            }
+            '&' if !in_quotes => {
+                if !current_arg.is_empty() || was_quoted {
+                    if was_quoted {
+                        current_args.push(current_arg.clone());
+                    } else {
+                        current_args.extend(expand_globs(&current_arg));
+                    }
+                    current_arg.clear();
+                    was_quoted = false;
+                }
+                background = true;
             }
             '2' if !in_quotes && current_arg.is_empty() && chars.peek() == Some(&'>') => {
                 chars.next(); // consume '>'
@@ -698,6 +713,7 @@ pub fn parse_full_command(input: &str, env_map: &HashMap<String, String>) -> Vec
         commands.push(CommandArgs {
             args: current_args,
             redirection: redirections,
+            background,
         });
     }
 

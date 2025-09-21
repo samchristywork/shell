@@ -1,14 +1,14 @@
 use crate::parser::{
-    expand_tilde, parse_arguments, parse_full_command, split_conditional_commands,
-    CommandArgs, LogicalOperator, Redirection,
+    expand_tilde, parse_arguments, parse_full_command, split_conditional_commands, CommandArgs,
+    LogicalOperator, Redirection,
 };
 use colored::*;
-use rustyline::{Editor, history::FileHistory};
+use rustyline::{history::FileHistory, Editor};
 use std::collections::HashMap;
 use std::env;
 use std::fs::{File, OpenOptions};
-use std::path::PathBuf;
 use std::os::unix::process::ExitStatusExt;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 
@@ -26,6 +26,7 @@ pub fn execute_command_with_redirection(
     args: &[&str],
     redirections: &[Redirection],
     env_map: &HashMap<String, String>,
+    background: bool,
 ) -> ExecutionResult {
     let mut cmd = Command::new(command);
     cmd.args(args);
@@ -149,6 +150,11 @@ pub fn execute_command_with_redirection(
             return ExecutionResult::Failure;
         }
     };
+
+    if background {
+        println!("[{}]", child.id());
+        return ExecutionResult::Success;
+    }
 
     let status = child.wait();
 
@@ -306,6 +312,7 @@ pub fn execute_single_command(
                     &final_arg_refs,
                     &command_args.redirection,
                     env_map,
+                    command_args.background,
                 )
             } else {
                 execute_command_with_redirection(
@@ -313,6 +320,7 @@ pub fn execute_single_command(
                     &args,
                     &command_args.redirection,
                     env_map,
+                    command_args.background,
                 )
             }
         }
@@ -332,6 +340,7 @@ pub fn execute_piped_commands(
         return execute_single_command(commands.into_iter().next().unwrap(), aliases, env_map);
     }
 
+    let background = commands[0].background;
     let mut children = Vec::new();
     let mut previous_stdout = None;
 
@@ -438,6 +447,13 @@ pub fn execute_piped_commands(
         }
     }
 
+    if background {
+        for child in &children {
+            println!("[{}]", child.id());
+        }
+        return ExecutionResult::Success;
+    }
+
     let mut interrupted = false;
     let mut failure = false;
 
@@ -505,7 +521,11 @@ pub fn handle_builtin_command(
             println!("  - Use | for piping commands");
             println!("  - Use > or >> for output redirection");
             println!("  - Use 2> or 2>> for error redirection");
+            println!("  - Use < for input redirection");
+            println!("  - Use && and || for logical operators");
+            println!("  - Use & to run commands in the background");
             println!("  - Environment variables: $VAR or ${{VAR}}");
+            println!(r"  - Command substitution: $(command) or `command` ");
             println!("  - Tilde expansion: ~/path");
             println!("  - Wildcards: *, ?, [a-z]");
             Ok(Some(true))

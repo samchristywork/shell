@@ -219,6 +219,7 @@ pub enum Redirection {
     StdoutAppend(String),
     Stderr(String),
     StderrAppend(String),
+    Stdin(String),
 }
 
 #[derive(Debug)]
@@ -354,6 +355,35 @@ pub fn parse_full_command(input: &str, env_map: &HashMap<String, String>) -> Vec
                 } else {
                     redirections.push(Redirection::Stdout(filename));
                 }
+            }
+            '<' if !in_quotes => {
+                if !current_arg.is_empty() || was_quoted {
+                    if was_quoted {
+                        current_args.push(current_arg.clone());
+                    } else {
+                        current_args.extend(expand_globs(&current_arg));
+                    }
+                    current_arg.clear();
+                    was_quoted = false;
+                }
+
+                // Consume filename
+                while let Some(&nc) = chars.peek() {
+                    if nc == ' ' || nc == '\t' {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                let mut filename = String::new();
+                while let Some(&nc) = chars.peek() {
+                    if nc == ' ' || nc == '\t' || nc == '|' || nc == '>' || nc == '<' || nc == ';' {
+                        break;
+                    }
+                    filename.push(chars.next().unwrap());
+                }
+
+                redirections.push(Redirection::Stdin(filename));
             }
             ' ' | '\t' if !in_quotes => {
                 if !current_arg.is_empty() || was_quoted {

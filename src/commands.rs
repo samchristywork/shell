@@ -24,9 +24,25 @@ pub fn execute_command_with_redirection(
 
     let mut stdout_redirected = false;
     let mut stderr_redirected = false;
+    let mut stdin_redirected = false;
 
     for redir in redirections {
         match redir {
+            Redirection::Stdin(filename) => match File::open(filename) {
+                Ok(file) => {
+                    cmd.stdin(Stdio::from(file));
+                    stdin_redirected = true;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "{}: Failed to open file '{}' for stdin: {}",
+                        "Error".red().bold(),
+                        filename,
+                        e
+                    );
+                    return true;
+                }
+            },
             Redirection::Stdout(filename) => match File::create(filename) {
                 Ok(file) => {
                     cmd.stdout(Stdio::from(file));
@@ -99,6 +115,9 @@ pub fn execute_command_with_redirection(
     }
     if !stderr_redirected {
         cmd.stderr(Stdio::inherit());
+    }
+    if !stdin_redirected {
+        cmd.stdin(Stdio::inherit());
     }
 
     let mut child = match cmd.spawn() {
@@ -325,9 +344,23 @@ pub fn execute_piped_commands(
 
         let mut stdout_redirected = false;
         let mut stderr_redirected = false;
+        let mut stdin_redirected = false;
 
         for redir in &cmd_args.redirection {
             match redir {
+                Redirection::Stdin(filename) => {
+                    if let Ok(file) = File::open(filename) {
+                        cmd.stdin(Stdio::from(file));
+                        stdin_redirected = true;
+                    } else {
+                        eprintln!(
+                            "{}: Failed to open file '{}' for stdin",
+                            "Error".red().bold(),
+                            filename
+                        );
+                        return true;
+                    }
+                }
                 Redirection::Stdout(filename) => {
                     if let Ok(file) = File::create(filename) {
                         cmd.stdout(Stdio::from(file));
@@ -365,6 +398,10 @@ pub fn execute_piped_commands(
 
         if !stderr_redirected {
             cmd.stderr(Stdio::inherit());
+        }
+
+        if !stdin_redirected && i == 0 {
+            cmd.stdin(Stdio::inherit());
         }
 
         match cmd.spawn() {

@@ -1,4 +1,4 @@
-use crate::parser::{CommandArgs, Redirection, parse_arguments, parse_full_command};
+use crate::parser::{CommandArgs, Redirection, expand_tilde, parse_arguments, parse_full_command};
 use colored::*;
 use rustyline::{Editor, history::FileHistory};
 use std::collections::HashMap;
@@ -454,12 +454,7 @@ pub fn handle_builtin_command(
                 }
             } else if args.len() == 1 {
                 let new_path = args[0];
-                let expanded_path = if new_path.starts_with("~") {
-                    let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
-                    home_dir.join(&new_path[2..]).to_string_lossy().to_string()
-                } else {
-                    new_path.to_string()
-                };
+                let expanded_path = expand_tilde(new_path);
 
                 let path_buf = PathBuf::from(&expanded_path);
                 if !path_buf.exists() {
@@ -587,13 +582,7 @@ pub fn execute_file_commands(
                                 }
                             } else if args.len() == 1 {
                                 let new_path = args[0];
-                                let expanded_path = if new_path.starts_with("~") {
-                                    let home_dir =
-                                        dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
-                                    home_dir.join(&new_path[2..]).to_string_lossy().to_string()
-                                } else {
-                                    new_path.to_string()
-                                };
+                                let expanded_path = expand_tilde(new_path);
 
                                 let path_buf = PathBuf::from(&expanded_path);
                                 if !path_buf.exists() {

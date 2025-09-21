@@ -62,10 +62,14 @@ fn handle_line(
                             return Ok(false);
                         }
                     } else {
-                        execute_piped_commands(full_commands, aliases, env_map);
+                        if !execute_piped_commands(full_commands, aliases, env_map) {
+                            break;
+                        }
                     }
                 } else {
-                    execute_piped_commands(full_commands, aliases, env_map);
+                    if !execute_piped_commands(full_commands, aliases, env_map) {
+                        break;
+                    }
                 }
             }
 

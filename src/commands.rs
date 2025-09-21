@@ -5,16 +5,18 @@ use std::collections::HashMap;
 use std::env;
 use std::fs::{File, OpenOptions};
 use std::path::PathBuf;
+use std::os::unix::process::ExitStatusExt;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 
 static PREVIOUS_DIR: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+
 pub fn execute_command_with_redirection(
     command: &str,
     args: &[&str],
     redirections: &[Redirection],
     env_map: &HashMap<String, String>,
-) {
+) -> bool {
     let mut cmd = Command::new(command);
     cmd.args(args);
     cmd.env_clear();
@@ -37,7 +39,7 @@ pub fn execute_command_with_redirection(
                         filename,
                         e
                     );
-                    return;
+                    return true;
                 }
             },
             Redirection::StdoutAppend(filename) => {
@@ -53,7 +55,7 @@ pub fn execute_command_with_redirection(
                             filename,
                             e
                         );
-                        return;
+                        return true;
                     }
                 }
             }
@@ -69,7 +71,7 @@ pub fn execute_command_with_redirection(
                         filename,
                         e
                     );
-                    return;
+                    return true;
                 }
             },
             Redirection::StderrAppend(filename) => {
@@ -85,7 +87,7 @@ pub fn execute_command_with_redirection(
                             filename,
                             e
                         );
-                        return;
+                        return true;
                     }
                 }
             }
@@ -115,7 +117,7 @@ pub fn execute_command_with_redirection(
             } else {
                 eprintln!("{}: {command}: {e}", "Error".red().bold());
             }
-            return;
+            return true;
         }
     };
 
@@ -123,15 +125,31 @@ pub fn execute_command_with_redirection(
 
     match status {
         Ok(status) => {
+            if let Some(sig) = status.signal() {
+                if sig == 2 {
+                    // SIGINT
+                    println!(); // Just a newline to clean up
+                    return false;
+                }
+                eprintln!(
+                    "{}: Command terminated by signal: {}",
+                    "Warning".yellow().bold(),
+                    sig
+                );
+                return false;
+            }
+
             if !status.success() {
                 eprintln!(
                     "{}: Command exited with status: {status}",
                     "Warning".yellow().bold()
                 );
             }
+            true
         }
         Err(e) => {
             eprintln!("{}: Failed to wait for command: {e}", "Error".red().bold());
+            true
         }
     }
 }
@@ -140,9 +158,9 @@ pub fn execute_single_command(
     command_args: CommandArgs,
     aliases: &mut HashMap<String, String>,
     env_map: &mut HashMap<String, String>,
-) {
+) -> bool {
     if command_args.args.is_empty() {
-        return;
+        return true;
     }
 
     let command = &command_args.args[0];
@@ -171,6 +189,7 @@ pub fn execute_single_command(
                     "set".red().bold()
                 );
             }
+            true
         }
         "alias" => {
             if args.is_empty() {
@@ -187,6 +206,7 @@ pub fn execute_single_command(
             } else {
                 eprintln!("{}: Usage: alias [name=value]", "alias".red().bold());
             }
+            true
         }
         "cd" => {
             let current_dir = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -200,14 +220,14 @@ pub fn execute_single_command(
                         prev_dir.clone()
                     } else {
                         eprintln!("{}: -: No previous directory", "cd".red().bold());
-                        return;
+                        return true;
                     }
                 } else {
                     eprintln!(
                         "{}: -: Failed to access previous directory",
                         "cd".red().bold()
                     );
-                    return;
+                    return true;
                 }
             } else {
                 let path = args[0];
@@ -235,6 +255,7 @@ pub fn execute_single_command(
                     println!("{}", target_dir.display());
                 }
             }
+            true
         }
         _ => {
             let expanded_command = if let Some(alias_value) = aliases.get(command) {
@@ -256,14 +277,14 @@ pub fn execute_single_command(
                     &final_arg_refs,
                     &command_args.redirection,
                     env_map,
-                );
+                )
             } else {
                 execute_command_with_redirection(
                     command,
                     &args,
                     &command_args.redirection,
                     env_map,
-                );
+                )
             }
         }
     }
@@ -273,14 +294,13 @@ pub fn execute_piped_commands(
     commands: Vec<CommandArgs>,
     aliases: &mut HashMap<String, String>,
     env_map: &mut HashMap<String, String>,
-) {
+) -> bool {
     if commands.is_empty() {
-        return;
+        return true;
     }
 
     if commands.len() == 1 {
-        execute_single_command(commands.into_iter().next().unwrap(), aliases, env_map);
-        return;
+        return execute_single_command(commands.into_iter().next().unwrap(), aliases, env_map);
     }
 
     let mut children = Vec::new();
@@ -366,15 +386,27 @@ pub fn execute_piped_commands(
                 } else {
                     eprintln!("{}: {command}: {e}", "Error".red().bold());
                 }
-                return;
+                return true;
             }
         }
     }
 
+    let mut interrupted = false;
     for mut child in children {
         match child.wait() {
             Ok(status) => {
-                if !status.success() {
+                if let Some(sig) = status.signal() {
+                    if sig == 2 {
+                        interrupted = true;
+                    } else if !interrupted {
+                        eprintln!(
+                            "{}: Command terminated by signal: {}",
+                            "Warning".yellow().bold(),
+                            sig
+                        );
+                        interrupted = true;
+                    }
+                } else if !status.success() && !interrupted {
                     eprintln!(
                         "{}: Command exited with status: {status}",
                         "Warning".yellow().bold()
@@ -385,6 +417,13 @@ pub fn execute_piped_commands(
                 eprintln!("{}: Failed to wait for command: {e}", "Error".red().bold());
             }
         }
+    }
+
+    if interrupted {
+        println!();
+        false
+    } else {
+        true
     }
 }
 

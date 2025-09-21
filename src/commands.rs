@@ -102,7 +102,19 @@ pub fn execute_command_with_redirection(
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(e) => {
-            eprintln!("{}: {command}: {e}", "Error".red().bold());
+            if e.kind() == std::io::ErrorKind::NotFound {
+                if command.contains('/') {
+                    eprintln!(
+                        "{}: {}: No such file or directory",
+                        "Error".red().bold(),
+                        command
+                    );
+                } else {
+                    eprintln!("{}: command not found", command);
+                }
+            } else {
+                eprintln!("{}: {command}: {e}", "Error".red().bold());
+            }
             return;
         }
     };
@@ -341,7 +353,19 @@ pub fn execute_piped_commands(
                 children.push(child);
             }
             Err(e) => {
-                eprintln!("{}: {command}: {e}", "Error".red().bold());
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    if command.contains('/') {
+                        eprintln!(
+                            "{}: {}: No such file or directory",
+                            "Error".red().bold(),
+                            command
+                        );
+                    } else {
+                        eprintln!("{}: command not found", command);
+                    }
+                } else {
+                    eprintln!("{}: {command}: {e}", "Error".red().bold());
+                }
                 return;
             }
         }

@@ -1,6 +1,27 @@
 use glob::glob;
 use std::collections::HashMap;
 
+use std::process::{Command, Stdio};
+
+pub fn expand_command_substitution(command: &str, env_map: &HashMap<String, String>) -> String {
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .env_clear()
+        .envs(env_map)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .output();
+
+    match output {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            stdout.trim_end_matches('\n').to_string()
+        }
+        Err(_) => String::new(),
+    }
+}
+
 pub fn expand_tilde(path: &str) -> String {
     if path == "~" {
         dirs::home_dir()
@@ -81,6 +102,29 @@ pub fn parse_arguments(input: &str, env_map: &HashMap<String, String>) -> Vec<St
             c if in_quotes && c == quote_char => {
                 in_quotes = false;
             }
+            '`' if !in_quotes || (in_quotes && quote_char == '"') => {
+                let mut sub_command = String::new();
+                while let Some(nc) = chars.next() {
+                    if nc == '`' {
+                        break;
+                    }
+                    if nc == '\\' {
+                        if let Some(next_c) = chars.next() {
+                            if next_c == '$' || next_c == '`' || next_c == '"' || next_c == '\\' {
+                                sub_command.push(next_c);
+                            } else {
+                                sub_command.push('\\');
+                                sub_command.push(next_c);
+                            }
+                        } else {
+                            sub_command.push('\\');
+                        }
+                    } else {
+                        sub_command.push(nc);
+                    }
+                }
+                current_arg.push_str(&expand_command_substitution(&sub_command, env_map));
+            }
             ' ' | '\t' if !in_quotes => {
                 if !current_arg.is_empty() || was_quoted {
                     if was_quoted {
@@ -103,7 +147,23 @@ pub fn parse_arguments(input: &str, env_map: &HashMap<String, String>) -> Vec<St
             }
             '$' if !in_quotes || (in_quotes && quote_char == '"') => {
                 if let Some(&next_char) = chars.peek() {
-                    if next_char == '{' {
+                    if next_char == '(' {
+                        chars.next(); // consume '('
+                        let mut sub_command = String::new();
+                        let mut paren_count = 1;
+                        while let Some(nc) = chars.next() {
+                            if nc == '(' {
+                                paren_count += 1;
+                            } else if nc == ')' {
+                                paren_count -= 1;
+                                if paren_count == 0 {
+                                    break;
+                                }
+                            }
+                            sub_command.push(nc);
+                        }
+                        current_arg.push_str(&expand_command_substitution(&sub_command, env_map));
+                    } else if next_char == '{' {
                         chars.next();
                         let mut var_name = String::new();
                         let mut found_closing = false;
@@ -344,17 +404,46 @@ pub fn parse_full_command(input: &str, env_map: &HashMap<String, String>) -> Vec
                     }
                 }
                 let mut filename = String::new();
+                let mut f_in_quotes = false;
+                let mut f_quote_char = '"';
+                let mut f_paren_count = 0;
+
                 while let Some(&nc) = chars.peek() {
-                    if nc == ' ' || nc == '\t' || nc == '|' || nc == '>' || nc == ';' {
+                    if !f_in_quotes && f_paren_count == 0 && (nc == ' ' || nc == '\t' || nc == '|' || nc == '>' || nc == '<' || nc == ';') {
                         break;
                     }
-                    filename.push(chars.next().unwrap());
+                    let c = chars.next().unwrap();
+                    match c {
+                        '"' | '\'' if !f_in_quotes => {
+                            f_in_quotes = true;
+                            f_quote_char = c;
+                        }
+                        c if f_in_quotes && c == f_quote_char => {
+                            f_in_quotes = false;
+                        }
+                        '(' if !f_in_quotes => {
+                            f_paren_count += 1;
+                            filename.push(c);
+                        }
+                        ')' if !f_in_quotes && f_paren_count > 0 => {
+                            f_paren_count -= 1;
+                            filename.push(c);
+                        }
+                        _ => filename.push(c),
+                    }
                 }
 
-                if is_append {
-                    redirections.push(Redirection::StderrAppend(filename));
+                let expanded_files = parse_arguments(&filename, env_map);
+                let final_filename = if expanded_files.is_empty() {
+                    filename
                 } else {
-                    redirections.push(Redirection::Stderr(filename));
+                    expanded_files[0].clone()
+                };
+
+                if is_append {
+                    redirections.push(Redirection::StderrAppend(final_filename));
+                } else {
+                    redirections.push(Redirection::Stderr(final_filename));
                 }
             }
             '>' if !in_quotes => {
@@ -383,17 +472,46 @@ pub fn parse_full_command(input: &str, env_map: &HashMap<String, String>) -> Vec
                     }
                 }
                 let mut filename = String::new();
+                let mut f_in_quotes = false;
+                let mut f_quote_char = '"';
+                let mut f_paren_count = 0;
+
                 while let Some(&nc) = chars.peek() {
-                    if nc == ' ' || nc == '\t' || nc == '|' || nc == '>' || nc == ';' {
+                    if !f_in_quotes && f_paren_count == 0 && (nc == ' ' || nc == '\t' || nc == '|' || nc == '>' || nc == '<' || nc == ';') {
                         break;
                     }
-                    filename.push(chars.next().unwrap());
+                    let c = chars.next().unwrap();
+                    match c {
+                        '"' | '\'' if !f_in_quotes => {
+                            f_in_quotes = true;
+                            f_quote_char = c;
+                        }
+                        c if f_in_quotes && c == f_quote_char => {
+                            f_in_quotes = false;
+                        }
+                        '(' if !f_in_quotes => {
+                            f_paren_count += 1;
+                            filename.push(c);
+                        }
+                        ')' if !f_in_quotes && f_paren_count > 0 => {
+                            f_paren_count -= 1;
+                            filename.push(c);
+                        }
+                        _ => filename.push(c),
+                    }
                 }
 
-                if is_append {
-                    redirections.push(Redirection::StdoutAppend(filename));
+                let expanded_files = parse_arguments(&filename, env_map);
+                let final_filename = if expanded_files.is_empty() {
+                    filename
                 } else {
-                    redirections.push(Redirection::Stdout(filename));
+                    expanded_files[0].clone()
+                };
+
+                if is_append {
+                    redirections.push(Redirection::StdoutAppend(final_filename));
+                } else {
+                    redirections.push(Redirection::Stdout(final_filename));
                 }
             }
             '<' if !in_quotes => {
@@ -416,14 +534,66 @@ pub fn parse_full_command(input: &str, env_map: &HashMap<String, String>) -> Vec
                     }
                 }
                 let mut filename = String::new();
+                let mut f_in_quotes = false;
+                let mut f_quote_char = '"';
+                let mut f_paren_count = 0;
+
                 while let Some(&nc) = chars.peek() {
-                    if nc == ' ' || nc == '\t' || nc == '|' || nc == '>' || nc == '<' || nc == ';' {
+                    if !f_in_quotes && f_paren_count == 0 && (nc == ' ' || nc == '\t' || nc == '|' || nc == '>' || nc == '<' || nc == ';') {
                         break;
                     }
-                    filename.push(chars.next().unwrap());
+                    let c = chars.next().unwrap();
+                    match c {
+                        '"' | '\'' if !f_in_quotes => {
+                            f_in_quotes = true;
+                            f_quote_char = c;
+                        }
+                        c if f_in_quotes && c == f_quote_char => {
+                            f_in_quotes = false;
+                        }
+                        '(' if !f_in_quotes => {
+                            f_paren_count += 1;
+                            filename.push(c);
+                        }
+                        ')' if !f_in_quotes && f_paren_count > 0 => {
+                            f_paren_count -= 1;
+                            filename.push(c);
+                        }
+                        _ => filename.push(c),
+                    }
                 }
 
-                redirections.push(Redirection::Stdin(filename));
+                let expanded_files = parse_arguments(&filename, env_map);
+                let final_filename = if expanded_files.is_empty() {
+                    filename
+                } else {
+                    expanded_files[0].clone()
+                };
+
+                redirections.push(Redirection::Stdin(final_filename));
+            }
+            '`' if !in_quotes || (in_quotes && quote_char == '"') => {
+                let mut sub_command = String::new();
+                while let Some(nc) = chars.next() {
+                    if nc == '`' {
+                        break;
+                    }
+                    if nc == '\\' {
+                        if let Some(next_c) = chars.next() {
+                            if next_c == '$' || next_c == '`' || next_c == '"' || next_c == '\\' {
+                                sub_command.push(next_c);
+                            } else {
+                                sub_command.push('\\');
+                                sub_command.push(next_c);
+                            }
+                        } else {
+                            sub_command.push('\\');
+                        }
+                    } else {
+                        sub_command.push(nc);
+                    }
+                }
+                current_arg.push_str(&expand_command_substitution(&sub_command, env_map));
             }
             ' ' | '\t' if !in_quotes => {
                 if !current_arg.is_empty() || was_quoted {
@@ -438,7 +608,23 @@ pub fn parse_full_command(input: &str, env_map: &HashMap<String, String>) -> Vec
             }
             '$' if !in_quotes || (in_quotes && quote_char == '"') => {
                 if let Some(&next_char) = chars.peek() {
-                    if next_char == '{' {
+                    if next_char == '(' {
+                        chars.next(); // consume '('
+                        let mut sub_command = String::new();
+                        let mut paren_count = 1;
+                        while let Some(nc) = chars.next() {
+                            if nc == '(' {
+                                paren_count += 1;
+                            } else if nc == ')' {
+                                paren_count -= 1;
+                                if paren_count == 0 {
+                                    break;
+                                }
+                            }
+                            sub_command.push(nc);
+                        }
+                        current_arg.push_str(&expand_command_substitution(&sub_command, env_map));
+                    } else if next_char == '{' {
                         chars.next();
                         let mut var_name = String::new();
                         let mut found_closing = false;

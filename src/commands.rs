@@ -1,4 +1,7 @@
-use crate::parser::{CommandArgs, Redirection, expand_tilde, parse_arguments, parse_full_command};
+use crate::parser::{
+    expand_tilde, parse_arguments, parse_full_command, split_conditional_commands,
+    CommandArgs, LogicalOperator, Redirection,
+};
 use colored::*;
 use rustyline::{Editor, history::FileHistory};
 use std::collections::HashMap;
@@ -11,12 +14,19 @@ use std::sync::{Mutex, OnceLock};
 
 static PREVIOUS_DIR: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 
+#[derive(Debug, PartialEq)]
+pub enum ExecutionResult {
+    Success,
+    Failure,
+    Interrupted,
+}
+
 pub fn execute_command_with_redirection(
     command: &str,
     args: &[&str],
     redirections: &[Redirection],
     env_map: &HashMap<String, String>,
-) -> bool {
+) -> ExecutionResult {
     let mut cmd = Command::new(command);
     cmd.args(args);
     cmd.env_clear();
@@ -40,7 +50,7 @@ pub fn execute_command_with_redirection(
                         filename,
                         e
                     );
-                    return true;
+                    return ExecutionResult::Failure;
                 }
             },
             Redirection::Stdout(filename) => match File::create(filename) {
@@ -55,7 +65,7 @@ pub fn execute_command_with_redirection(
                         filename,
                         e
                     );
-                    return true;
+                    return ExecutionResult::Failure;
                 }
             },
             Redirection::StdoutAppend(filename) => {
@@ -71,7 +81,7 @@ pub fn execute_command_with_redirection(
                             filename,
                             e
                         );
-                        return true;
+                        return ExecutionResult::Failure;
                     }
                 }
             }
@@ -87,7 +97,7 @@ pub fn execute_command_with_redirection(
                         filename,
                         e
                     );
-                    return true;
+                    return ExecutionResult::Failure;
                 }
             },
             Redirection::StderrAppend(filename) => {
@@ -103,7 +113,7 @@ pub fn execute_command_with_redirection(
                             filename,
                             e
                         );
-                        return true;
+                        return ExecutionResult::Failure;
                     }
                 }
             }
@@ -136,7 +146,7 @@ pub fn execute_command_with_redirection(
             } else {
                 eprintln!("{}: {command}: {e}", "Error".red().bold());
             }
-            return true;
+            return ExecutionResult::Failure;
         }
     };
 
@@ -148,27 +158,24 @@ pub fn execute_command_with_redirection(
                 if sig == 2 {
                     // SIGINT
                     println!(); // Just a newline to clean up
-                    return false;
+                    return ExecutionResult::Interrupted;
                 }
                 eprintln!(
                     "{}: Command terminated by signal: {}",
                     "Warning".yellow().bold(),
                     sig
                 );
-                return false;
+                return ExecutionResult::Interrupted;
             }
 
             if !status.success() {
-                eprintln!(
-                    "{}: Command exited with status: {status}",
-                    "Warning".yellow().bold()
-                );
+                return ExecutionResult::Failure;
             }
-            true
+            ExecutionResult::Success
         }
         Err(e) => {
             eprintln!("{}: Failed to wait for command: {e}", "Error".red().bold());
-            true
+            ExecutionResult::Failure
         }
     }
 }
@@ -177,9 +184,9 @@ pub fn execute_single_command(
     command_args: CommandArgs,
     aliases: &mut HashMap<String, String>,
     env_map: &mut HashMap<String, String>,
-) -> bool {
+) -> ExecutionResult {
     if command_args.args.is_empty() {
-        return true;
+        return ExecutionResult::Success;
     }
 
     let command = &command_args.args[0];
@@ -207,8 +214,9 @@ pub fn execute_single_command(
                     "{}: Usage: set [VAR=value] or set [VAR] [value]",
                     "set".red().bold()
                 );
+                return ExecutionResult::Failure;
             }
-            true
+            ExecutionResult::Success
         }
         "alias" => {
             if args.is_empty() {
@@ -224,8 +232,9 @@ pub fn execute_single_command(
                 }
             } else {
                 eprintln!("{}: Usage: alias [name=value]", "alias".red().bold());
+                return ExecutionResult::Failure;
             }
-            true
+            ExecutionResult::Success
         }
         "cd" => {
             let current_dir = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -239,14 +248,14 @@ pub fn execute_single_command(
                         prev_dir.clone()
                     } else {
                         eprintln!("{}: -: No previous directory", "cd".red().bold());
-                        return true;
+                        return ExecutionResult::Failure;
                     }
                 } else {
                     eprintln!(
                         "{}: -: Failed to access previous directory",
                         "cd".red().bold()
                     );
-                    return true;
+                    return ExecutionResult::Failure;
                 }
             } else {
                 let path = args[0];
@@ -264,6 +273,7 @@ pub fn execute_single_command(
 
             if let Err(e) = env::set_current_dir(&target_dir) {
                 eprintln!("{}: {}: {}", "cd".red().bold(), target_dir.display(), e);
+                ExecutionResult::Failure
             } else {
                 let prev_dir_mutex = PREVIOUS_DIR.get_or_init(|| Mutex::new(None));
                 if let Ok(mut prev_dir_guard) = prev_dir_mutex.lock() {
@@ -273,8 +283,8 @@ pub fn execute_single_command(
                 if !args.is_empty() && args[0] == "-" {
                     println!("{}", target_dir.display());
                 }
+                ExecutionResult::Success
             }
-            true
         }
         _ => {
             let expanded_command = if let Some(alias_value) = aliases.get(command) {
@@ -313,9 +323,9 @@ pub fn execute_piped_commands(
     commands: Vec<CommandArgs>,
     aliases: &mut HashMap<String, String>,
     env_map: &mut HashMap<String, String>,
-) -> bool {
+) -> ExecutionResult {
     if commands.is_empty() {
-        return true;
+        return ExecutionResult::Success;
     }
 
     if commands.len() == 1 {
@@ -358,7 +368,7 @@ pub fn execute_piped_commands(
                             "Error".red().bold(),
                             filename
                         );
-                        return true;
+                        return ExecutionResult::Failure;
                     }
                 }
                 Redirection::Stdout(filename) => {
@@ -423,12 +433,14 @@ pub fn execute_piped_commands(
                 } else {
                     eprintln!("{}: {command}: {e}", "Error".red().bold());
                 }
-                return true;
+                return ExecutionResult::Failure;
             }
         }
     }
 
     let mut interrupted = false;
+    let mut failure = false;
+
     for mut child in children {
         match child.wait() {
             Ok(status) => {
@@ -444,23 +456,23 @@ pub fn execute_piped_commands(
                         interrupted = true;
                     }
                 } else if !status.success() && !interrupted {
-                    eprintln!(
-                        "{}: Command exited with status: {status}",
-                        "Warning".yellow().bold()
-                    );
+                    failure = true;
                 }
             }
             Err(e) => {
                 eprintln!("{}: Failed to wait for command: {e}", "Error".red().bold());
+                failure = true;
             }
         }
     }
 
     if interrupted {
         println!();
-        false
+        ExecutionResult::Interrupted
+    } else if failure {
+        ExecutionResult::Failure
     } else {
-        true
+        ExecutionResult::Success
     }
 }
 
@@ -613,95 +625,128 @@ pub fn execute_file_commands(
             let content = std::fs::read_to_string(file_path)?;
             for line in content.lines() {
                 let input = line.trim();
-                if input.is_empty() {
+                if input.is_empty() || input.starts_with('#') {
                     continue;
                 }
 
-                let full_commands = parse_full_command(input, env_map);
-                if full_commands.is_empty() {
-                    continue;
-                }
+                let conditional_commands = split_conditional_commands(input);
+                let mut skip_until_next_semicolon = false;
 
-                if full_commands.len() == 1 {
-                    let cmd_args = &full_commands[0];
-                    if cmd_args.args.is_empty() {
+                for cond_cmd in conditional_commands {
+                    if skip_until_next_semicolon {
+                        if cond_cmd.operator == LogicalOperator::Semicolon {
+                            skip_until_next_semicolon = false;
+                        }
                         continue;
                     }
-                    let command = &cmd_args.args[0];
-                    let args: Vec<&str> = cmd_args.args[1..].iter().map(|s| s.as_str()).collect();
 
-                    match command.as_str() {
-                        "exit" => break,
-                        "alias" => {
-                            if args.is_empty() {
-                                for (name, value) in aliases.iter() {
-                                    println!("alias {}=\"{}\"", name, value);
-                                }
-                            } else if args.len() == 1 && args[0].contains('=') {
-                                let alias_def = args[0];
-                                if let Some(eq_pos) = alias_def.find('=') {
-                                    let name = alias_def[..eq_pos].to_string();
-                                    let value =
-                                        alias_def[eq_pos + 1..].trim_matches('"').to_string();
-                                    aliases.insert(name, value);
-                                }
-                            } else {
-                                eprintln!("{}: Usage: alias [name=value]", "alias".red().bold());
-                            }
-                        }
-                        "path" => {
-                            if args.is_empty() {
-                                if let Some(path) = env_map.get("PATH") {
-                                    println!("{}", path);
-                                } else {
-                                    println!();
-                                }
-                            } else if args.len() == 1 {
-                                let new_path = args[0];
-                                let expanded_path = expand_tilde(new_path);
-
-                                let path_buf = PathBuf::from(&expanded_path);
-                                if !path_buf.exists() {
-                                    eprintln!(
-                                        "{}: Directory does not exist: {}",
-                                        "path".red().bold(),
-                                        expanded_path
-                                    );
-                                } else if !path_buf.is_dir() {
-                                    eprintln!(
-                                        "{}: Not a directory: {}",
-                                        "path".red().bold(),
-                                        expanded_path
-                                    );
-                                } else {
-                                    let current_path =
-                                        env_map.get("PATH").cloned().unwrap_or_default();
-                                    let new_full_path = if current_path.is_empty() {
-                                        expanded_path.clone()
-                                    } else {
-                                        format!("{}:{}", expanded_path, current_path)
-                                    };
-                                    env_map.insert("PATH".to_string(), new_full_path);
-                                    println!(
-                                        "{}: Added {} to PATH",
-                                        "path".green().bold(),
-                                        expanded_path
-                                    );
-                                }
-                            } else {
-                                eprintln!("{}: Usage: path [directory]", "path".red().bold());
-                            }
-                        }
-                        _ => {
-                            execute_single_command(
-                                full_commands.into_iter().next().unwrap(),
-                                aliases,
-                                env_map,
-                            );
-                        }
+                    let cmd_input = cond_cmd.command.trim();
+                    if cmd_input.is_empty() {
+                        continue;
                     }
-                } else {
-                    execute_piped_commands(full_commands, aliases, env_map);
+
+                    let full_commands = parse_full_command(cmd_input, env_map);
+                    if full_commands.is_empty() {
+                        continue;
+                    }
+
+                    let current_result = if full_commands.len() == 1 {
+                        let cmd_args = &full_commands[0];
+                        if cmd_args.args.is_empty() {
+                            ExecutionResult::Success
+                        } else {
+                            let command = &cmd_args.args[0];
+                            let args: Vec<&str> =
+                                cmd_args.args[1..].iter().map(|s| s.as_str()).collect();
+
+                            match command.as_str() {
+                                "exit" => return Ok(()),
+                                "set" => execute_single_command(
+                                    full_commands.into_iter().next().unwrap(),
+                                    aliases,
+                                    env_map,
+                                ),
+                                "alias" => execute_single_command(
+                                    full_commands.into_iter().next().unwrap(),
+                                    aliases,
+                                    env_map,
+                                ),
+                                "cd" => execute_single_command(
+                                    full_commands.into_iter().next().unwrap(),
+                                    aliases,
+                                    env_map,
+                                ),
+                                "path" => {
+                                    if args.is_empty() {
+                                        if let Some(path) = env_map.get("PATH") {
+                                            println!("{}", path);
+                                        } else {
+                                            println!();
+                                        }
+                                    } else if args.len() == 1 {
+                                        let new_path = args[0];
+                                        let expanded_path = expand_tilde(new_path);
+
+                                        let path_buf = PathBuf::from(&expanded_path);
+                                        if !path_buf.exists() {
+                                            eprintln!(
+                                                "{}: Directory does not exist: {}",
+                                                "path".red().bold(),
+                                                expanded_path
+                                            );
+                                        } else if !path_buf.is_dir() {
+                                            eprintln!(
+                                                "{}: Not a directory: {}",
+                                                "path".red().bold(),
+                                                expanded_path
+                                            );
+                                        } else {
+                                            let current_path =
+                                                env_map.get("PATH").cloned().unwrap_or_default();
+                                            let new_full_path = if current_path.is_empty() {
+                                                expanded_path.clone()
+                                            } else {
+                                                format!("{}:{}", expanded_path, current_path)
+                                            };
+                                            env_map.insert("PATH".to_string(), new_full_path);
+                                            println!(
+                                                "{}: Added {} to PATH",
+                                                "path".green().bold(),
+                                                expanded_path
+                                            );
+                                        }
+                                    } else {
+                                        eprintln!(
+                                            "{}: Usage: path [directory]",
+                                            "path".red().bold()
+                                        );
+                                    }
+                                    ExecutionResult::Success
+                                }
+                                _ => execute_piped_commands(full_commands, aliases, env_map),
+                            }
+                        }
+                    } else {
+                        execute_piped_commands(full_commands, aliases, env_map)
+                    };
+
+                    if current_result == ExecutionResult::Interrupted {
+                        break;
+                    }
+
+                    match cond_cmd.operator {
+                        LogicalOperator::And => {
+                            if current_result == ExecutionResult::Failure {
+                                skip_until_next_semicolon = true;
+                            }
+                        }
+                        LogicalOperator::Or => {
+                            if current_result == ExecutionResult::Success {
+                                skip_until_next_semicolon = true;
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
         } else {

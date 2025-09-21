@@ -4,9 +4,9 @@ mod parser;
 
 use clap::{arg, command, value_parser};
 use colored::*;
-use commands::{execute_file_commands, execute_piped_commands, handle_builtin_command};
+use commands::{execute_file_commands, execute_piped_commands, handle_builtin_command, ExecutionResult};
 use completion::{ShellHelper, create_editor};
-use parser::{parse_full_command, split_commands};
+use parser::{parse_full_command, split_conditional_commands, LogicalOperator};
 use rustyline::Editor;
 use rustyline::error::ReadlineError;
 use signal_hook::{consts::SIGINT, iterator::Signals};
@@ -32,11 +32,18 @@ fn handle_line(
                 return Ok(true);
             }
 
-            // Split by semicolons and execute each command
-            let commands = split_commands(input);
+            let conditional_commands = split_conditional_commands(input);
+            let mut skip_until_next_semicolon = false;
 
-            for cmd_input in commands {
-                let cmd_input = cmd_input.trim();
+            for cond_cmd in conditional_commands {
+                if skip_until_next_semicolon {
+                    if cond_cmd.operator == LogicalOperator::Semicolon {
+                        skip_until_next_semicolon = false;
+                    }
+                    continue;
+                }
+
+                let cmd_input = cond_cmd.command.trim();
                 if cmd_input.is_empty() {
                     continue;
                 }
@@ -46,30 +53,46 @@ fn handle_line(
                     continue;
                 }
 
-                if full_commands.len() == 1 {
+                let current_result = if full_commands.len() == 1 {
                     let cmd_args = &full_commands[0];
                     if cmd_args.args.is_empty() {
-                        continue;
-                    }
-
-                    let command = &cmd_args.args[0];
-                    let args: Vec<&str> = cmd_args.args[1..].iter().map(|s| s.as_str()).collect();
-
-                    if let Some(should_continue) =
-                        handle_builtin_command(command, &args, rl, aliases, env_map)?
-                    {
-                        if !should_continue {
-                            return Ok(false);
-                        }
+                        ExecutionResult::Success
                     } else {
-                        if !execute_piped_commands(full_commands, aliases, env_map) {
-                            break;
+                        let command = &cmd_args.args[0];
+                        let args: Vec<&str> =
+                            cmd_args.args[1..].iter().map(|s| s.as_str()).collect();
+
+                        if let Some(should_continue) =
+                            handle_builtin_command(command, &args, rl, aliases, env_map)?
+                        {
+                            if !should_continue {
+                                return Ok(false);
+                            }
+                            ExecutionResult::Success
+                        } else {
+                            execute_piped_commands(full_commands, aliases, env_map)
                         }
                     }
                 } else {
-                    if !execute_piped_commands(full_commands, aliases, env_map) {
-                        break;
+                    execute_piped_commands(full_commands, aliases, env_map)
+                };
+
+                if current_result == ExecutionResult::Interrupted {
+                    break;
+                }
+
+                match cond_cmd.operator {
+                    LogicalOperator::And => {
+                        if current_result == ExecutionResult::Failure {
+                            skip_until_next_semicolon = true;
+                        }
                     }
+                    LogicalOperator::Or => {
+                        if current_result == ExecutionResult::Success {
+                            skip_until_next_semicolon = true;
+                        }
+                    }
+                    _ => {}
                 }
             }
 

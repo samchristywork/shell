@@ -170,7 +170,21 @@ pub fn parse_arguments(input: &str, env_map: &HashMap<String, String>) -> Vec<St
     args
 }
 
-pub fn split_commands(input: &str) -> Vec<String> {
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum LogicalOperator {
+    None,
+    Semicolon,
+    And,
+    Or,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConditionalCommand {
+    pub command: String,
+    pub operator: LogicalOperator,
+}
+
+pub fn split_conditional_commands(input: &str) -> Vec<ConditionalCommand> {
     let mut commands = Vec::new();
     let mut current_command = String::new();
     let mut in_quotes = false;
@@ -196,7 +210,30 @@ pub fn split_commands(input: &str) -> Vec<String> {
             }
             ';' if !in_quotes => {
                 if !current_command.trim().is_empty() {
-                    commands.push(current_command.trim().to_string());
+                    commands.push(ConditionalCommand {
+                        command: current_command.trim().to_string(),
+                        operator: LogicalOperator::Semicolon,
+                    });
+                }
+                current_command.clear();
+            }
+            '&' if !in_quotes && chars.peek() == Some(&'&') => {
+                chars.next(); // consume second '&'
+                if !current_command.trim().is_empty() {
+                    commands.push(ConditionalCommand {
+                        command: current_command.trim().to_string(),
+                        operator: LogicalOperator::And,
+                    });
+                }
+                current_command.clear();
+            }
+            '|' if !in_quotes && chars.peek() == Some(&'|') => {
+                chars.next(); // consume second '|'
+                if !current_command.trim().is_empty() {
+                    commands.push(ConditionalCommand {
+                        command: current_command.trim().to_string(),
+                        operator: LogicalOperator::Or,
+                    });
                 }
                 current_command.clear();
             }
@@ -207,7 +244,10 @@ pub fn split_commands(input: &str) -> Vec<String> {
     }
 
     if !current_command.trim().is_empty() {
-        commands.push(current_command.trim().to_string());
+        commands.push(ConditionalCommand {
+            command: current_command.trim().to_string(),
+            operator: LogicalOperator::None,
+        });
     }
 
     commands

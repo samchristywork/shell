@@ -289,51 +289,47 @@ pub fn execute_piped_commands(
             cmd.stdin(stdout);
         }
 
-        if i == commands.len() - 1 {
-            let mut stdout_redirected = false;
-            let mut stderr_redirected = false;
+        let mut stdout_redirected = false;
+        let mut stderr_redirected = false;
 
-            for redir in &cmd_args.redirection {
-                match redir {
-                    Redirection::Stdout(filename) => {
-                        if let Ok(file) = File::create(filename) {
-                            cmd.stdout(Stdio::from(file));
-                            stdout_redirected = true;
-                        }
+        for redir in &cmd_args.redirection {
+            match redir {
+                Redirection::Stdout(filename) => {
+                    if let Ok(file) = File::create(filename) {
+                        cmd.stdout(Stdio::from(file));
+                        stdout_redirected = true;
                     }
-                    Redirection::StdoutAppend(filename) => {
-                        if let Ok(file) =
-                            OpenOptions::new().create(true).append(true).open(filename)
-                        {
-                            cmd.stdout(Stdio::from(file));
-                            stdout_redirected = true;
-                        }
+                }
+                Redirection::StdoutAppend(filename) => {
+                    if let Ok(file) = OpenOptions::new().create(true).append(true).open(filename) {
+                        cmd.stdout(Stdio::from(file));
+                        stdout_redirected = true;
                     }
-                    Redirection::Stderr(filename) => {
-                        if let Ok(file) = File::create(filename) {
-                            cmd.stderr(Stdio::from(file));
-                            stderr_redirected = true;
-                        }
+                }
+                Redirection::Stderr(filename) => {
+                    if let Ok(file) = File::create(filename) {
+                        cmd.stderr(Stdio::from(file));
+                        stderr_redirected = true;
                     }
-                    Redirection::StderrAppend(filename) => {
-                        if let Ok(file) =
-                            OpenOptions::new().create(true).append(true).open(filename)
-                        {
-                            cmd.stderr(Stdio::from(file));
-                            stderr_redirected = true;
-                        }
+                }
+                Redirection::StderrAppend(filename) => {
+                    if let Ok(file) = OpenOptions::new().create(true).append(true).open(filename) {
+                        cmd.stderr(Stdio::from(file));
+                        stderr_redirected = true;
                     }
                 }
             }
+        }
 
-            if !stdout_redirected {
+        if !stdout_redirected {
+            if i == commands.len() - 1 {
                 cmd.stdout(Stdio::inherit());
+            } else {
+                cmd.stdout(Stdio::piped());
             }
-            if !stderr_redirected {
-                cmd.stderr(Stdio::inherit());
-            }
-        } else {
-            cmd.stdout(Stdio::piped());
+        }
+
+        if !stderr_redirected {
             cmd.stderr(Stdio::inherit());
         }
 

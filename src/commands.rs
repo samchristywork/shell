@@ -234,6 +234,20 @@ pub fn execute_single_command(
             }
             ExecutionResult::Success
         }
+        "source" | "." => {
+            if args.is_empty() {
+                eprintln!("{}: Usage: {} [file]", command.red().bold(), command);
+                return ExecutionResult::Failure;
+            }
+            let file_path = PathBuf::from(expand_tilde(args[0]));
+            match execute_file_commands(&Some(file_path), aliases, env_map) {
+                Ok(_) => ExecutionResult::Success,
+                Err(e) => {
+                    eprintln!("{}: {}: {}", command.red().bold(), args[0], e);
+                    ExecutionResult::Failure
+                }
+            }
+        }
         "alias" => {
             if args.is_empty() {
                 for (name, value) in aliases.iter() {
@@ -516,6 +530,8 @@ pub fn handle_builtin_command(
             println!("  {:10} - Change the current directory", "cd".green());
             println!("  {:10} - Set or list environment variables", "set".green());
             println!("  {:10} - Remove environment variables", "unset".green());
+            println!("  {:10} - Execute commands from a file", "source".green());
+            println!("  {:10} - Alias for source", ".".green());
             println!("  {:10} - Define or list aliases", "alias".green());
             println!(
                 "  {:10} - Add a directory to PATH or list PATH",
@@ -553,6 +569,17 @@ pub fn handle_builtin_command(
             } else {
                 for var in args {
                     env_map.remove(*var);
+                }
+            }
+            Ok(Some(true))
+        }
+        "source" | "." => {
+            if args.is_empty() {
+                eprintln!("{}: Usage: {} [file]", command.red().bold(), command);
+            } else {
+                let file_path = PathBuf::from(expand_tilde(args[0]));
+                if let Err(e) = execute_file_commands(&Some(file_path), aliases, env_map) {
+                    eprintln!("{}: {}: {}", command.red().bold(), args[0], e);
                 }
             }
             Ok(Some(true))
@@ -708,6 +735,11 @@ pub fn execute_file_commands(
                                     env_map,
                                 ),
                                 "unset" => execute_single_command(
+                                    full_commands.into_iter().next().unwrap(),
+                                    aliases,
+                                    env_map,
+                                ),
+                                "source" | "." => execute_single_command(
                                     full_commands.into_iter().next().unwrap(),
                                     aliases,
                                     env_map,

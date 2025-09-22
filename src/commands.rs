@@ -224,6 +224,16 @@ pub fn execute_single_command(
             }
             ExecutionResult::Success
         }
+        "unset" => {
+            if args.is_empty() {
+                eprintln!("{}: Usage: unset [VAR...]", "unset".red().bold());
+                return ExecutionResult::Failure;
+            }
+            for var in args {
+                env_map.remove(var);
+            }
+            ExecutionResult::Success
+        }
         "alias" => {
             if args.is_empty() {
                 for (name, value) in aliases.iter() {
@@ -505,6 +515,7 @@ pub fn handle_builtin_command(
             println!("{}", "Shell Builtin Commands:".bold().bright_blue());
             println!("  {:10} - Change the current directory", "cd".green());
             println!("  {:10} - Set or list environment variables", "set".green());
+            println!("  {:10} - Remove environment variables", "unset".green());
             println!("  {:10} - Define or list aliases", "alias".green());
             println!(
                 "  {:10} - Add a directory to PATH or list PATH",
@@ -533,6 +544,16 @@ pub fn handle_builtin_command(
         "history" => {
             for (i, entry) in rl.history().iter().enumerate() {
                 println!("{:5}  {}", i + 1, entry);
+            }
+            Ok(Some(true))
+        }
+        "unset" => {
+            if args.is_empty() {
+                eprintln!("{}: Usage: unset [VAR...]", "unset".red().bold());
+            } else {
+                for var in args {
+                    env_map.remove(*var);
+                }
             }
             Ok(Some(true))
         }
@@ -682,6 +703,11 @@ pub fn execute_file_commands(
                             match command.as_str() {
                                 "exit" => return Ok(()),
                                 "set" => execute_single_command(
+                                    full_commands.into_iter().next().unwrap(),
+                                    aliases,
+                                    env_map,
+                                ),
+                                "unset" => execute_single_command(
                                     full_commands.into_iter().next().unwrap(),
                                     aliases,
                                     env_map,

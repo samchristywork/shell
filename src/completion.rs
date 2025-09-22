@@ -112,6 +112,8 @@ impl ShellCompleter {
             "exit".to_string(),
             "alias".to_string(),
             "set".to_string(),
+            "unset".to_string(),
+            "path".to_string(),
             "history".to_string(),
             "help".to_string(),
         ]
